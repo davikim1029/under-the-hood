@@ -430,19 +430,60 @@ def start_server(port: int, bind: str, wait_seconds: float) -> None:
         print(last_error)
 
 
-def stop_server(force: bool = False) -> None:
+def confirm_viewer_pid(pid: int, port: int) -> tuple[str, str]:
+    """Decide whether pid really is this viewer before signalling it.
+
+    Returns "confirmed", "mismatch" (positively some other process), or
+    "unknown" (no evidence either way). ps is the primary check. When ps
+    cannot describe the process, /api/health reports the server's own pid,
+    which keeps stop working through a ps timeout on a loaded machine.
+    """
+    command = process_command(pid)
+    if command:
+        if "server.mjs" in command:
+            return "confirmed", ""
+        return (
+            "mismatch",
+            f"PID {pid} is running, but it does not look like this viewer:\n{command}",
+        )
+
+    try:
+        health = read_health(port, timeout=2.0, include_tailnet=False)
+    except RuntimeError as error:
+        return (
+            "unknown",
+            f"ps could not describe PID {pid}, and no viewer answered health.\n{error}",
+        )
+
+    reported = health.payload.get("pid")
+    if reported == pid:
+        return "confirmed", ""
+    return (
+        "mismatch",
+        f"ps could not describe PID {pid}, and the viewer answering at "
+        f"{health.base_url} reports PID {reported} instead.",
+    )
+
+
+def stop_server(port: int, force: bool = False) -> None:
     pid = managed_pid()
     if pid is None:
         print("No managed server PID file was found.")
         return
 
-    command = process_command(pid)
-    if command and "server.mjs" not in command:
-        print(f"PID {pid} is running, but it does not look like this viewer:")
-        print(command)
+    status, reason = confirm_viewer_pid(pid, port)
+    if status == "mismatch":
+        print(reason)
         print("Leaving it alone and removing the stale PID file.")
         PID_FILE.unlink(missing_ok=True)
         return
+    if status == "unknown":
+        print(reason)
+        if not force:
+            print("Not signalling a PID that could not be verified.")
+            print("Re-run with --force to stop it anyway.")
+            return
+        print("Signalling anyway because --force was given.")
 
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -471,7 +512,7 @@ def stop_server(force: bool = False) -> None:
 
 
 def restart_server(port: int, bind: str, wait_seconds: float, force: bool = False) -> None:
-    stop_server(force=force)
+    stop_server(port, force=force)
     start_server(port, bind, wait_seconds)
 
 
@@ -540,7 +581,7 @@ def show_menu(args: argparse.Namespace) -> None:
                 print_url(args.port)
                 pause()
             elif choice in ("4", "stop"):
-                stop_server(force=args.force)
+                stop_server(args.port, force=args.force)
                 pause()
             elif choice in ("5", "restart", "restart-server"):
                 restart_server(args.port, args.bind, args.wait, force=args.force)
@@ -575,7 +616,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> None:
     elif normalized in ("url", "tailscale-url", "funnel-url"):
         print_url(args.port)
     elif normalized == "stop":
-        stop_server(force=args.force)
+        stop_server(args.port, force=args.force)
     elif normalized in ("restart", "restart-server"):
         restart_server(args.port, args.bind, args.wait, force=args.force)
     elif normalized in ("logs", "log"):
@@ -592,7 +633,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bind", default=DEFAULT_BIND, help=f"Bind mode/host for server start (default: {DEFAULT_BIND})")
     parser.add_argument("--wait", type=float, default=20, help="Seconds to wait for health after starting")
     parser.add_argument("--lines", type=int, default=40, help="Log lines to print")
-    parser.add_argument("--force", action="store_true", help="Use SIGKILL if stop does not exit cleanly")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Use SIGKILL if stop does not exit cleanly, and stop a PID that could not be verified",
+    )
     return parser
 
 
