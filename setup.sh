@@ -247,24 +247,69 @@ detect_linux_package_manager() {
   return 1
 }
 
+# Package name for a logical tool, where distros disagree.
+package_for() {
+  local manager="$1" logical="$2"
+  case "$logical" in
+    procps)
+      case "$manager" in
+        dnf|yum|pacman) printf 'procps-ng\n' ;;
+        *) printf 'procps\n' ;;
+      esac
+      ;;
+    *)
+      printf '%s\n' "$logical"
+      ;;
+  esac
+}
+
+# Only ever install what is actually missing. These machines run other
+# services, and blanket-installing nodejs/npm can downgrade or displace an
+# existing nvm or NodeSource install that those services depend on.
+MISSING_PACKAGES=()
+collect_missing_linux_packages() {
+  local manager="$1"
+  local logical
+  MISSING_PACKAGES=()
+  for logical in \
+    "$(node_ok || printf 'nodejs')" \
+    "$(have npm || printf 'npm')" \
+    "$(have clang || printf 'clang')" \
+    "$(have nm || printf 'binutils')" \
+    "$(have lsof || printf 'lsof')" \
+    "$(have ps || printf 'procps')" \
+    "$(have strace || printf 'strace')"
+  do
+    if [[ -n "$logical" ]]; then
+      MISSING_PACKAGES+=("$(package_for "$manager" "$logical")")
+    fi
+  done
+  return 0
+}
+
 install_linux_packages() {
   local manager="$1"
+  shift
+  if [[ "$#" -eq 0 ]]; then
+    ok " No packages needed; everything required is already installed"
+    return 0
+  fi
   case "$manager" in
     apt-get)
       sudo_run apt-get update
-      sudo_run apt-get install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates strace
+      sudo_run apt-get install -y "$@"
       ;;
     dnf)
-      sudo_run dnf install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
+      sudo_run dnf install -y "$@"
       ;;
     yum)
-      sudo_run yum install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
+      sudo_run yum install -y "$@"
       ;;
     pacman)
-      sudo_run pacman -Sy --needed --noconfirm nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
+      sudo_run pacman -Sy --needed --noconfirm "$@"
       ;;
     zypper)
-      sudo_run zypper install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates strace
+      sudo_run zypper install -y "$@"
       ;;
     *)
       warn "Unsupported package manager: $manager"
@@ -284,8 +329,13 @@ ensure_linux_required() {
     REQUIRED_MISSING=1
     return 1
   fi
-  log "Installing required packages with $manager"
-  install_linux_packages "$manager"
+  collect_missing_linux_packages "$manager"
+  if [[ "${#MISSING_PACKAGES[@]}" -eq 0 ]]; then
+    ok " Required Linux tools are available"
+    return 0
+  fi
+  log "Installing only the missing packages: ${MISSING_PACKAGES[*]}"
+  install_linux_packages "$manager" "${MISSING_PACKAGES[@]}"
   hash -r
   if node_ok && have npm && have clang && have nm && have lsof && have ps; then
     ok " Required Linux tools are available"
