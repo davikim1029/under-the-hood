@@ -1,6 +1,8 @@
 node_modules/
+__pycache__/
 .DS_Store
 .env
 dist/
 tmp/
+logs/
 *.log

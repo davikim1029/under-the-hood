@@ -7,16 +7,18 @@
     "under-the-hood": "./cli.mjs"
   },
   "scripts": {
-    "cli": "node cli.mjs",
+    "cli": "python3 main.py",
+    "node-cli": "node cli.mjs",
     "dev": "node server.mjs",
     "tailnet": "UTH_BIND=tailnet node server.mjs",
     "agent": "UTH_BIND=0.0.0.0 node server.mjs",
     "funnel": "tailscale funnel --bg 5173",
-    "start-server": "node cli.mjs start",
-    "health": "node cli.mjs health",
-    "url": "node cli.mjs url",
+    "start-server": "python3 main.py --mode start-server",
+    "stop-server": "python3 main.py --mode stop",
+    "health": "python3 main.py --mode health",
+    "url": "python3 main.py --mode url",
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check cli.mjs && node --check public/app.js"
+    "check": "python3 -m py_compile main.py && node --check server.mjs && node --check cli.mjs && node --check public/app.js"
   },
   "engines": {
     "node": ">=18"

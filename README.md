@@ -28,7 +28,7 @@ PID attachment, program execution, file tracing, and disassembly need access to 
 ## Run
 
 ```sh
-npm run dev
+npm run start-server
 ```
 
 Open the URL printed in the terminal.
@@ -47,16 +47,26 @@ Direct commands:
 npm run start-server
 npm run health
 npm run url
+npm run stop-server
 ```
 
-`npm run start-server` starts the server in Tailnet mode when a Tailscale interface is available. `npm run health` checks the running viewer on localhost or the Tailnet URL. `npm run url` prints the best URL to use for this machine, preferring a detected Funnel URL, then the Tailnet URL.
+`npm run start-server` uses `main.py` to start `server.mjs` as a detached background process, so the launcher can exit without stopping the viewer. It writes `logs/under_the_hood.pid` and `logs/under_the_hood.log`.
+
+`npm run health` checks the running viewer on localhost or the Tailnet URL. `npm run url` prints the best URL to use for this machine, preferring a detected Funnel URL, then the Tailnet URL. You can also use the wrapper directly:
+
+```sh
+python3 main.py --mode start-server
+python3 main.py --mode health
+python3 main.py --mode url
+python3 main.py --mode stop
+```
 
 ## View the browser over Tailscale
 
 To make this viewer reachable from your other Tailnet devices, start it in Tailnet mode:
 
 ```sh
-npm run tailnet
+npm run start-server
 ```
 
 The server detects the machine's Tailscale `100.x.y.z` address from the OS network interfaces and binds directly to that address. It also keeps `http://127.0.0.1:5173` available on the same machine. Open the printed Tailnet URL from another device on the same Tailnet.
