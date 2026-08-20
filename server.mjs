@@ -346,8 +346,19 @@ function formatHostForUrl(host) {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
+// Declared as a function so it is hoisted: inspectLocalNetwork() runs during
+// module initialization, before any const in this section is assigned.
+function isOwnTailscaleInterface(name) {
+  return /^(?:tailscale|ts)\d*$/i.test(name);
+}
+
+function isWslRuntime() {
+  return process.platform === "linux" && /microsoft/i.test(os.release());
+}
+
 function inspectLocalNetwork() {
   const interfaces = os.networkInterfaces();
+  const underWsl = isWslRuntime();
   const addresses = [];
   const tailscale = [];
 
@@ -363,21 +374,32 @@ function inspectLocalNetwork() {
       };
       addresses.push(row);
       if (isTailscaleHost(entry.address)) {
+        row.ownInterface = isOwnTailscaleInterface(name);
+        // WSL mirrored networking copies the Windows host's adapters into the VM,
+        // including its Tailscale adapter. That address belongs to a different
+        // tailnet node: inbound traffic is answered by the Windows daemon and never
+        // reaches this VM, so binding it yields a listener nothing can connect to.
+        row.foreign = underWsl && !row.ownInterface;
         tailscale.push(row);
       }
     }
   }
 
   tailscale.sort((a, b) => {
-    if (a.family === b.family) return a.address.localeCompare(b.address);
-    return a.family === "IPv4" ? -1 : 1;
+    if (a.foreign !== b.foreign) return a.foreign ? 1 : -1;
+    if (a.ownInterface !== b.ownInterface) return a.ownInterface ? -1 : 1;
+    if (a.family !== b.family) return a.family === "IPv4" ? -1 : 1;
+    return a.address.localeCompare(b.address);
   });
+
+  const bindable = tailscale.filter((entry) => !entry.foreign);
 
   return {
     addresses,
     tailscale,
-    tailscaleIpv4: tailscale.find((entry) => entry.family === "IPv4")?.address || "",
-    tailscaleIpv6: tailscale.find((entry) => entry.family === "IPv6")?.address || ""
+    tailscaleIpv4: bindable.find((entry) => entry.family === "IPv4")?.address || "",
+    tailscaleIpv6: bindable.find((entry) => entry.family === "IPv6")?.address || "",
+    foreignTailscale: tailscale.filter((entry) => entry.foreign)
   };
 }
 
@@ -387,6 +409,17 @@ function resolveBindHost(requested, network) {
     const host = network.tailscaleIpv4 || network.tailscaleIpv6;
     if (host) {
       return { host, mode: "tailnet" };
+    }
+    const mirrored = (network.foreignTailscale || [])[0];
+    if (mirrored) {
+      return {
+        host: "127.0.0.1",
+        mode: "localhost",
+        warning:
+          `No Tailscale interface was found inside WSL. ${mirrored.address} (${mirrored.interface}) is the Windows ` +
+          "host's tailnet address mirrored in by WSL networking, and binding it would not be reachable. " +
+          "Start Tailscale inside WSL, or use UTH_BIND=all. Falling back to localhost."
+      };
     }
     return {
       host: "127.0.0.1",
@@ -407,9 +440,18 @@ function resolveBindHost(requested, network) {
     return { host: "127.0.0.1", mode: "localhost" };
   }
 
+  const mirrored = (network.foreignTailscale || []).find(
+    (entry) => entry.address.toLowerCase() === stripIpv6Brackets(requested)
+  );
+
   return {
     host: requested,
-    mode: isTailscaleHost(requested) ? "tailnet" : isLoopbackHost(requested) ? "localhost" : "custom"
+    mode: isTailscaleHost(requested) ? "tailnet" : isLoopbackHost(requested) ? "localhost" : "custom",
+    warning: mirrored
+      ? `${requested} is the Windows host's tailnet address, mirrored into WSL as ${mirrored.interface}. ` +
+        "Connections to it are handled by Windows and never reach this listener; " +
+        "use UTH_BIND=tailnet or UTH_BIND=all instead."
+      : undefined
   };
 }
 

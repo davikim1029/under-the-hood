@@ -96,19 +96,15 @@ def unique(values: Iterable[str]) -> list[str]:
     return ordered
 
 
-def detect_tailscale_addresses() -> list[str]:
-    candidates: list[str] = []
+TAILSCALE_INTERFACE_RE = re.compile(r"^(?:tailscale|ts)\d*$", re.IGNORECASE)
+IP_LINK_HEADER_RE = re.compile(r"^\d+:\s+([^:@\s]+)")
+IFCONFIG_HEADER_RE = re.compile(r"^([A-Za-z0-9_.-]+):\s")
 
-    try:
-        hostname = socket.gethostname()
-        for entry in socket.getaddrinfo(hostname, None):
-            address = entry[4][0]
-            if is_tailscale_host(address):
-                candidates.append(normalize_host_token(address))
-    except OSError:
-        pass
 
-    for command in (["ifconfig"], ["ip", "addr", "show"]):
+def tailscale_interface_addresses() -> list[tuple[str, str]]:
+    """Return (interface, tailnet address) pairs as reported by the OS."""
+    pairs: list[tuple[str, str]] = []
+    for command in (["ip", "addr", "show"], ["ifconfig"]):
         if shutil.which(command[0]) is None:
             continue
         try:
@@ -122,11 +118,42 @@ def detect_tailscale_addresses() -> list[str]:
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
-        text = f"{result.stdout}\n{result.stderr}"
-        for raw in re.split(r"\s+", text):
-            token = normalize_host_token(raw)
-            if is_tailscale_host(token):
-                candidates.append(token)
+        interface = ""
+        for line in f"{result.stdout}\n{result.stderr}".splitlines():
+            header = IP_LINK_HEADER_RE.match(line) or IFCONFIG_HEADER_RE.match(line)
+            if header:
+                interface = header.group(1)
+                continue
+            for raw in re.split(r"\s+", line.strip()):
+                token = normalize_host_token(raw)
+                if is_tailscale_host(token):
+                    pairs.append((interface, token))
+        if pairs:
+            break
+    return pairs
+
+
+def detect_tailscale_addresses() -> list[str]:
+    pairs = tailscale_interface_addresses()
+    own = [address for interface, address in pairs if TAILSCALE_INTERFACE_RE.match(interface)]
+
+    if own:
+        candidates = own
+    elif running_in_wsl() and pairs:
+        # Under WSL mirrored networking the only tailnet addresses visible here belong
+        # to the Windows host's node. Traffic to them is answered by Windows and never
+        # reaches this VM, so probing or advertising one hangs. Report nothing instead.
+        candidates = []
+    else:
+        candidates = [address for _, address in pairs]
+        try:
+            hostname = socket.gethostname()
+            for entry in socket.getaddrinfo(hostname, None):
+                address = entry[4][0]
+                if is_tailscale_host(address):
+                    candidates.append(normalize_host_token(address))
+        except OSError:
+            pass
 
     def sort_key(address: str) -> tuple[int, str]:
         return (0 if parse_ipv4(address) else 1, address)
@@ -384,7 +411,10 @@ def start_server(port: int, bind: str, wait_seconds: float) -> None:
 
     env = os.environ.copy()
     env["PORT"] = str(port)
-    env.setdefault("UTH_BIND", bind)
+    # Assign rather than setdefault: an inherited UTH_BIND must not beat an explicit
+    # --bind. The --bind default already falls back to UTH_BIND (see DEFAULT_BIND),
+    # so the environment still wins when no flag is given.
+    env["UTH_BIND"] = bind
     command = [node_binary(), "server.mjs"]
 
     start_line = f"\n--- {datetime.now().astimezone().isoformat(timespec='seconds')} starting {' '.join(command)} ---\n"
