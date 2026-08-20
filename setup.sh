@@ -31,6 +31,7 @@ Optional tools:
   tailscale          Tailnet discovery and Funnel URL detection.
   uv                 Python project-context analysis for pyproject/uv.lock repos.
   objdump/otool      Object disassembly. macOS can use otool as the fallback.
+  strace             Save-probe syscall tracing on Linux and WSL.
   vmmap/dtruss       Deeper macOS process/save tracing, subject to OS permissions.
 EOF
 }
@@ -49,6 +50,30 @@ warn() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+# Mirrors findTailscaleCli() in server.mjs: the CLI is often not on PATH.
+resolve_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then
+    command -v tailscale
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    /usr/bin/tailscale \
+    /usr/sbin/tailscale \
+    /opt/homebrew/bin/tailscale \
+    /usr/local/bin/tailscale \
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+    "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale" \
+    "/mnt/c/Program Files/Tailscale/tailscale.exe" \
+    "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 ask_yes() {
@@ -180,8 +205,9 @@ ensure_xcode_clt() {
 }
 
 install_tailscale_macos() {
-  if have tailscale; then
-    ok " Tailscale CLI $(command -v tailscale)"
+  local existing
+  if existing="$(resolve_tailscale)"; then
+    ok " Tailscale CLI $existing"
     return 0
   fi
   if [[ "$WITH_TAILSCALE" != "1" ]]; then
@@ -190,10 +216,11 @@ install_tailscale_macos() {
   fi
   log "Installing Tailscale formula with Homebrew"
   brew_install tailscale --formula || brew_install tailscale --cask
-  if have tailscale; then
-    ok " Tailscale CLI $(command -v tailscale)"
+  hash -r
+  if existing="$(resolve_tailscale)"; then
+    ok " Tailscale CLI $existing"
   else
-    warn "Tailscale installed, but the CLI is not on PATH yet."
+    warn "Tailscale installed, but no CLI was found in the usual locations yet."
   fi
 }
 
@@ -225,19 +252,19 @@ install_linux_packages() {
   case "$manager" in
     apt-get)
       sudo_run apt-get update
-      sudo_run apt-get install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates
+      sudo_run apt-get install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates strace
       ;;
     dnf)
-      sudo_run dnf install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates
+      sudo_run dnf install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
       ;;
     yum)
-      sudo_run yum install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates
+      sudo_run yum install -y nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
       ;;
     pacman)
-      sudo_run pacman -Sy --needed --noconfirm nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates
+      sudo_run pacman -Sy --needed --noconfirm nodejs npm clang llvm binutils lsof procps-ng curl ca-certificates strace
       ;;
     zypper)
-      sudo_run zypper install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates
+      sudo_run zypper install -y nodejs npm clang llvm binutils lsof procps curl ca-certificates strace
       ;;
     *)
       warn "Unsupported package manager: $manager"
@@ -269,8 +296,9 @@ ensure_linux_required() {
 }
 
 install_tailscale_linux() {
-  if have tailscale; then
-    ok " Tailscale CLI $(command -v tailscale)"
+  local existing
+  if existing="$(resolve_tailscale)"; then
+    ok " Tailscale CLI $existing"
     return 0
   fi
   if [[ "$WITH_TAILSCALE" != "1" ]]; then
@@ -325,12 +353,30 @@ check_optional_tools() {
     warn "Neither objdump nor otool was found; machine-code disassembly will be limited."
   fi
 
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    have vmmap && ok " vmmap available" || warn "vmmap not found; PID Map will still show ps/lsof output."
-    have dtruss && ok " dtruss available" || warn "dtruss not found; save syscall tracing will be unavailable."
-  fi
+  case "$(uname -s)" in
+    Darwin)
+      have vmmap && ok " vmmap available" || warn "vmmap not found; PID Map will still show ps/lsof output."
+      have dtruss && ok " dtruss available" || warn "dtruss not found; save syscall tracing will be unavailable."
+      ;;
+    Linux)
+      if [[ -r /proc/self/maps ]]; then
+        ok " /proc memory maps readable"
+      else
+        warn "/proc is not readable; the PID Map view will fall back to ps/lsof output."
+      fi
+      have strace && ok " strace available" || warn "strace not found; save syscall tracing will be unavailable."
+      ;;
+  esac
 
-  have tailscale && ok " Tailscale CLI available" || warn "Tailscale CLI unavailable; Tailnet discovery/Funnel detection will be limited."
+  local tailscale_cli
+  if tailscale_cli="$(resolve_tailscale)"; then
+    ok " Tailscale CLI $tailscale_cli"
+    if [[ "$tailscale_cli" == /mnt/* ]]; then
+      warn "That is the Windows Tailscale CLI seen through WSL interop; its Funnel target is the Windows host, not this WSL listener."
+    fi
+  else
+    warn "Tailscale CLI unavailable; Tailnet discovery/Funnel detection will be limited."
+  fi
   have uv && ok " uv available" || warn "uv unavailable; Python analysis will fall back to plain python."
 }
 
@@ -341,7 +387,7 @@ print_versions() {
   have clang && printf 'clang: %s (%s)\n' "$(clang --version | head -n 1)" "$(command -v clang)" || printf 'clang: missing\n'
   have nm && printf 'nm: %s\n' "$(command -v nm)" || printf 'nm: missing\n'
   have lsof && printf 'lsof: %s\n' "$(command -v lsof)" || printf 'lsof: missing\n'
-  have tailscale && printf 'tailscale: %s\n' "$(command -v tailscale)" || true
+  resolve_tailscale >/dev/null 2>&1 && printf 'tailscale: %s\n' "$(resolve_tailscale)" || true
   have uv && printf 'uv: %s\n' "$(uv --version)" || true
 }
 

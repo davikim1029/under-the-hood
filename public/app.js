@@ -680,7 +680,7 @@ async function runSaveTrace() {
     source: $("#saveEditor").value,
     optimize: $("#saveOptimization").value,
     savePath: $("#savePath").value,
-    useDtruss: $("#attemptDtruss").checked
+    useSyscallTrace: $("#attemptSyscallTrace").checked
   });
   state.saveResult = result;
   renderSaveLayers(result.layers || []);
@@ -729,7 +729,7 @@ function renderSaveOutput() {
 
   if (state.saveArtifact === "syscalls") {
     if (!result.syscallTrace) {
-      output.textContent = "dtruss was not requested. On macOS it often requires elevated permissions and may be blocked for protected processes.";
+      output.textContent = "Syscall tracing was not requested. Linux uses strace; macOS uses dtruss, which often needs elevated permissions and may be blocked for protected processes.";
       return;
     }
     output.textContent =
@@ -766,6 +766,14 @@ async function inspectPid() {
 function renderProcessSummary(result) {
   const list = $("#processSummary");
   list.innerHTML = "";
+  const mapSource = result.vmmap?.source;
+  if (mapSource) {
+    const item = document.createElement("div");
+    item.className = "stage-item";
+    item.innerHTML = `<strong>Memory map source</strong><span class="stage-meta">${escapeHtml(mapSource)}</span>`;
+    list.append(item);
+  }
+
   const notes = result.notes || [];
   for (const note of notes) {
     const item = document.createElement("div");
@@ -806,7 +814,7 @@ function renderProcessOutput() {
   }
 
   if (state.processArtifact === "vmmap") {
-    output.textContent = [result.vmmap?.stdout, result.vmmap?.stderr].filter(Boolean).join("\n") || "No vmmap output.";
+    output.textContent = [result.vmmap?.stdout, result.vmmap?.stderr].filter(Boolean).join("\n") || "No memory-map output.";
     return;
   }
 

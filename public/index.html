@@ -133,8 +133,8 @@
             </select>
           </label>
           <label class="check-row">
-            <input id="attemptDtruss" type="checkbox">
-            <span>Attempt dtruss</span>
+            <input id="attemptSyscallTrace" type="checkbox">
+            <span>Attempt syscall trace</span>
           </label>
           <button id="runSaveTrace" class="primary-button" type="button">Run Save</button>
         </section>
@@ -181,7 +181,7 @@
           <section class="result-tabs" aria-label="Process output">
             <div class="tab-list" role="tablist">
               <button class="process-tab active" type="button" data-process="ps">Process</button>
-              <button class="process-tab" type="button" data-process="vmmap">vmmap</button>
+              <button class="process-tab" type="button" data-process="vmmap">Memory Map</button>
               <button class="process-tab" type="button" data-process="lsof">Open Files</button>
             </div>
             <pre id="processOutput" class="artifact-output"></pre>

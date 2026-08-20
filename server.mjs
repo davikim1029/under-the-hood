@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import {
+  access,
+  constants,
   mkdir,
   mkdtemp,
   readFile,
@@ -258,8 +260,26 @@ function runCommand(command, args, options = {}) {
 }
 
 async function commandExists(command) {
-  const result = await runCommand("/usr/bin/which", [command], { timeoutMs: 2_000 });
-  return result.ok ? result.stdout.trim() : "";
+  if (command.includes("/")) {
+    return (await isExecutableFile(command)) ? command : "";
+  }
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, command);
+    if (await isExecutableFile(candidate)) return candidate;
+  }
+  return "";
+}
+
+async function isExecutableFile(filePath) {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return false;
+    await access(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fileExists(filePath) {
@@ -295,9 +315,14 @@ async function findTailscaleCli() {
   if (fromPath) return fromPath;
 
   const candidates = [
+    "/usr/bin/tailscale",
+    "/usr/sbin/tailscale",
     "/opt/homebrew/bin/tailscale",
     "/usr/local/bin/tailscale",
-    "/usr/bin/tailscale"
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    path.join(os.homedir(), "Applications/Tailscale.app/Contents/MacOS/Tailscale"),
+    "/mnt/c/Program Files/Tailscale/tailscale.exe",
+    "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"
   ];
   for (const candidate of candidates) {
     try {
@@ -307,6 +332,10 @@ async function findTailscaleCli() {
     }
   }
   return "";
+}
+
+function isWindowsInteropCli(cliPath) {
+  return /^\/mnt\/[a-z]\//i.test(cliPath) || cliPath.toLowerCase().endsWith(".exe");
 }
 
 function stripIpv6Brackets(hostname) {
@@ -438,6 +467,10 @@ async function detectFunnel(port) {
     };
   }
 
+  const interopNote = isWindowsInteropCli(tailscalePath)
+    ? " This is the Windows Tailscale CLI reached over WSL interop, so its Funnel target is the Windows host, not this WSL listener."
+    : "";
+
   for (const command of ["funnel", "serve"]) {
     const result = await runCommand(tailscalePath, [command, "status", "--json"], {
       timeoutMs: 5_000
@@ -452,7 +485,7 @@ async function detectFunnel(port) {
           primaryUrl: urls[0],
           urls,
           source: `tailscale ${command} status --json`,
-          message: `Detected ${urls.length} Funnel URL${urls.length === 1 ? "" : "s"}.`
+          message: `Detected ${urls.length} Funnel URL${urls.length === 1 ? "" : "s"}.${interopNote}`
         };
       }
     } catch {
@@ -464,7 +497,7 @@ async function detectFunnel(port) {
     primaryUrl: "",
     urls: [],
     source: "tailscale status",
-    message: "No matching Funnel URL was found for this viewer port."
+    message: `No matching Funnel URL was found for this viewer port.${interopNote}`
   };
 }
 
@@ -623,7 +656,7 @@ function defaultAgentUrlForHost(host, port = basePort) {
 }
 
 async function discoverTailscale() {
-  const tailscalePath = await commandExists("tailscale");
+  const tailscalePath = await findTailscaleCli();
   if (!tailscalePath) {
     return {
       ok: true,
@@ -930,7 +963,9 @@ function filterAssembly(assembly, functionName) {
 function parseSymbolMap(symbolsText) {
   const byAddress = new Map();
   for (const line of symbolsText.split("\n")) {
-    const match = line.match(/^([0-9a-fA-F]+)\s+\([^)]*\)\s+(?:external|non-external)\s+([A-Za-z_.$][\w.$]*)/);
+    const match =
+      line.match(/^([0-9a-fA-F]+)\s+\([^)]*\)\s+(?:external|non-external)\s+([A-Za-z_.$][\w.$]*)/) ||
+      line.match(/^([0-9a-fA-F]+)\s+[A-Za-z]\s+([A-Za-z_.$][\w.$]*)\s*$/);
     if (!match) continue;
     const name = match[2].replace(/^_/, "");
     if (/^ltmp\d+$|^l_/.test(name)) continue;
@@ -1436,7 +1471,8 @@ async function compileSource(body) {
     disassembly = await stage("disassemble-otool", "Disassemble", "otool", ["-tvV", objectPath]);
   }
 
-  const symbols = await stage("symbols", "Symbols", "nm", ["-nm", objectPath]);
+  const symbolSort = process.platform === "darwin" ? "-nm" : "-n";
+  const symbols = await stage("symbols", "Symbols", "nm", [symbolSort, objectPath]);
 
   const rawAssembly = await readTextFileLimited(assemblyPath);
   const rawDisassembly = disassembly.stdout || disassembly.stderr || "";
@@ -1514,6 +1550,65 @@ function hexDump(buffer, width = 16) {
   return rows;
 }
 
+async function runSyscallTrace(executablePath, savePath, workDir) {
+  if (process.platform === "linux") {
+    const stracePath = await commandExists("strace");
+    if (!stracePath) {
+      return {
+        trace: {
+          ok: false,
+          stdout: "",
+          stderr: "strace is not installed. Install it (for example, sudo apt-get install strace) to record syscalls."
+        },
+        run: null
+      };
+    }
+
+    // -o keeps the trace out of the program's own stdout.
+    const tracePath = path.join(workDir, "syscalls.txt");
+    const result = await runCommand(stracePath, ["-f", "-o", tracePath, executablePath, savePath], {
+      cwd: workDir,
+      timeoutMs: 8_000
+    });
+
+    let traceText = "";
+    try {
+      traceText = await readTextFileLimited(tracePath);
+    } catch (error) {
+      traceText = `Could not read the strace log: ${error.message}`;
+    }
+
+    return {
+      trace: {
+        ok: result.ok,
+        stdout: traceText,
+        stderr: truncateText(result.stderr, 20_000)
+      },
+      run: result.ok ? { ok: true, code: result.code, stdout: result.stdout, stderr: "" } : null
+    };
+  }
+
+  if (process.platform === "darwin") {
+    const result = await runCommand("dtruss", ["-f", executablePath, savePath], {
+      cwd: workDir,
+      timeoutMs: 8_000
+    });
+    return {
+      trace: result,
+      run: result.ok ? { ok: true, code: result.code, stdout: result.stdout, stderr: "" } : null
+    };
+  }
+
+  return {
+    trace: {
+      ok: false,
+      stdout: "",
+      stderr: `Syscall tracing is not wired up for ${process.platform}.`
+    },
+    run: null
+  };
+}
+
 async function saveTrace(body) {
   const source = typeof body.source === "string" ? body.source : "";
   if (!source.trim()) {
@@ -1530,7 +1625,7 @@ async function saveTrace(body) {
     ? body.savePath.trim()
     : path.join(workDir, "save-output.bin");
   const savePath = path.resolve(requestedPath.replace(/^~(?=$|\/)/, os.homedir()));
-  const useDtruss = body.useDtruss === true;
+  const useSyscallTrace = body.useSyscallTrace === true || body.useDtruss === true;
 
   await mkdir(path.dirname(savePath), { recursive: true });
   await writeFile(sourcePath, source, "utf8");
@@ -1550,19 +1645,10 @@ async function saveTrace(body) {
 
   let syscallTrace = null;
   let run;
-  if (useDtruss && process.platform === "darwin") {
-    syscallTrace = await runCommand("dtruss", ["-f", executablePath, savePath], {
-      cwd: workDir,
-      timeoutMs: 8_000
-    });
-    if (syscallTrace.ok) {
-      run = {
-        ok: true,
-        code: syscallTrace.code,
-        stdout: syscallTrace.stdout,
-        stderr: ""
-      };
-    }
+  if (useSyscallTrace) {
+    const traced = await runSyscallTrace(executablePath, savePath, workDir);
+    syscallTrace = traced.trace;
+    if (traced.run) run = traced.run;
   }
 
   if (!run) {
@@ -1681,21 +1767,124 @@ function parseVmmap(raw) {
   };
 }
 
+function formatByteSize(bytes) {
+  const units = ["B", "K", "M", "G", "T"];
+  let value = Number(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)}${units[unit]}`;
+}
+
+function mapRegionLabel(pathname) {
+  const value = (pathname || "").trim();
+  if (!value) return "anonymous";
+  if (value.startsWith("[")) return value;
+  return path.basename(value);
+}
+
+function parseProcMaps(raw) {
+  const rows = [];
+  const counts = new Map();
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^([0-9a-f]+)-([0-9a-f]+)\s+(\S{4})\s+\S+\s+\S+\s+\d+\s*(.*)$/i);
+    if (!match) continue;
+    const [, start, end, perms, pathname] = match;
+    const region = mapRegionLabel(pathname);
+    rows.push({
+      region,
+      range: `${start}-${end}`,
+      size: formatByteSize(BigInt(`0x${end}`) - BigInt(`0x${start}`)),
+      perms,
+      raw: trimmed
+    });
+    counts.set(region, (counts.get(region) || 0) + 1);
+  }
+
+  return {
+    rows: rows.slice(0, 220),
+    histogram: [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([region, count]) => ({ region, count }))
+  };
+}
+
+async function readMemoryMap(pid) {
+  if (process.platform === "linux") {
+    const mapPath = `/proc/${pid}/maps`;
+    try {
+      const raw = await readFile(mapPath, "utf8");
+      return {
+        ok: true,
+        source: mapPath,
+        stdout: truncateText(raw, 80_000),
+        stderr: "",
+        parsed: parseProcMaps(raw)
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        source: mapPath,
+        stdout: "",
+        stderr: `Could not read ${mapPath}: ${error.message}`,
+        parsed: parseProcMaps("")
+      };
+    }
+  }
+
+  const vmmapPath = await commandExists("vmmap");
+  if (!vmmapPath) {
+    return {
+      ok: false,
+      source: "vmmap",
+      stdout: "",
+      stderr: "vmmap is not installed.",
+      parsed: parseVmmap("")
+    };
+  }
+
+  const result = await runCommand(vmmapPath, [String(pid)], { timeoutMs: 5_000 });
+  return {
+    ok: result.ok,
+    source: vmmapPath,
+    stdout: truncateText(result.stdout, 80_000),
+    stderr: truncateText(result.stderr, 30_000),
+    parsed: parseVmmap(result.stdout || "")
+  };
+}
+
+function processNotes() {
+  const notes = [
+    "This is a read-only process inspection, not function-call tracing.",
+    "Memory-map addresses are virtual addresses in that process, not physical RAM locations."
+  ];
+  if (process.platform === "linux") {
+    notes.push("The memory map is read straight from /proc/<pid>/maps, so no extra tooling is needed.");
+    notes.push("For live function call following, the next layer would use strace, perf, or eBPF probes with symbols and permission handling.");
+  } else {
+    notes.push("For live function call following, the next layer would use lldb, dtrace, or eBPF-style probes with symbols and OS permission handling.");
+    notes.push("macOS may block vmmap for protected processes.");
+  }
+  return notes;
+}
+
 async function inspectProcess(body) {
   const pid = Number.parseInt(String(body.pid || ""), 10);
   if (!Number.isInteger(pid) || pid <= 0) {
     throw new Error("Enter a valid PID.");
   }
 
-  const [ps, vmmapPath, lsofPath] = await Promise.all([
+  const [ps, memoryMap, lsofPath] = await Promise.all([
     runCommand("ps", ["-p", String(pid), "-o", "pid,ppid,state,comm,args"], { timeoutMs: 3_000 }),
-    commandExists("vmmap"),
+    readMemoryMap(pid),
     commandExists("lsof")
   ]);
 
-  const vmmap = vmmapPath
-    ? await runCommand(vmmapPath, [String(pid)], { timeoutMs: 5_000 })
-    : { ok: false, stdout: "", stderr: "vmmap is not installed." };
   const lsof = lsofPath
     ? await runCommand(lsofPath, ["-p", String(pid)], { timeoutMs: 5_000 })
     : { ok: false, stdout: "", stderr: "lsof is not installed." };
@@ -1708,22 +1897,13 @@ async function inspectProcess(body) {
       stdout: truncateText(ps.stdout, 20_000),
       stderr: truncateText(ps.stderr, 20_000)
     },
-    vmmap: {
-      ok: vmmap.ok,
-      stdout: truncateText(vmmap.stdout, 80_000),
-      stderr: truncateText(vmmap.stderr, 30_000),
-      parsed: parseVmmap(vmmap.stdout || "")
-    },
+    vmmap: memoryMap,
     lsof: {
       ok: lsof.ok,
       stdout: truncateText(lsof.stdout, 60_000),
       stderr: truncateText(lsof.stderr, 30_000)
     },
-    notes: [
-      "This is a read-only process inspection, not function-call tracing.",
-      "For live function call following, the next layer would use lldb, dtrace, or eBPF-style probes with symbols and OS permission handling.",
-      "Memory-map addresses are virtual addresses in that process, not physical RAM locations."
-    ]
+    notes: processNotes()
   };
 }
 
@@ -1866,6 +2046,12 @@ function listen(port, attempts = 0) {
 function listenOnLocalhost(port) {
   const localhostServer = createAppServer();
   localhostServer.once("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`Another process already owns 127.0.0.1:${port}.`);
+      console.error("Tailscale Serve/Funnel and the launcher health check both target loopback, so they");
+      console.error("would reach that process instead of this viewer. Stop it, or set a free PORT.");
+      process.exit(1);
+    }
     console.log(`Localhost URL unavailable: ${error.message}`);
   });
   localhostServer.listen(port, "127.0.0.1", () => {

@@ -199,11 +199,35 @@ def best_url(result: HealthResult) -> str:
     return (
         urls.get("funnel")
         or urls.get("public")
-        or urls.get("tailnet")
         or urls.get("advertised")
+        or urls.get("tailnet")
         or urls.get("local")
         or result.base_url
     )
+
+
+def running_in_wsl() -> bool:
+    try:
+        release = os.uname().release.lower()
+    except AttributeError:
+        release = ""
+    if "microsoft" in release or "wsl" in release:
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def print_access_notes(result: HealthResult) -> None:
+    payload = result.payload
+    urls = payload.get("browserUrls") or {}
+    bind_mode = payload.get("bindMode", "")
+    if bind_mode == "localhost" and urls.get("tailnet"):
+        print("remote warning: a Tailnet address was detected, but the server is only listening on localhost.")
+        print("remote warning: restart with --bind tailnet or --bind 0.0.0.0 before using the Tailnet URL.")
+    if running_in_wsl() and bind_mode not in ("tailnet", "all"):
+        print("wsl warning: this process is listening inside WSL; the Windows Tailscale IP will not automatically forward here.")
 
 
 def print_health(result: HealthResult) -> None:
@@ -223,6 +247,7 @@ def print_health(result: HealthResult) -> None:
     if urls.get("funnel"):
         print(f"funnel: {urls['funnel']}")
     print(f"advertised: {best_url(result)}")
+    print_access_notes(result)
 
 
 def read_pid() -> int | None:
@@ -483,7 +508,7 @@ def print_status(port: int) -> None:
     else:
         print("managed process: not running")
     try:
-        print_health(read_health(port, timeout=0.5))
+        print_health(read_health(port, timeout=2.0, include_tailnet=False))
     except RuntimeError as error:
         print(f"health: no response ({error})")
 
