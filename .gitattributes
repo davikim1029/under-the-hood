@@ -1,0 +1,6 @@
+# This repo is cloned on Windows hosts but executed inside WSL. CRLF endings
+# would break the shebang lines in the shell scripts and main.py with
+# "bad interpreter: /usr/bin/env bash^M".
+* text=auto eol=lf
+*.sh text eol=lf
+main.py text eol=lf
