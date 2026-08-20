@@ -75,7 +75,13 @@ const state = {
   saveArtifact: "hexDump",
   processResult: null,
   processArtifact: "ps",
-  activeMode: "compile"
+  activeMode: "compile",
+  folderBrowser: {
+    root: "",
+    parent: "",
+    entries: [],
+    places: []
+  }
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -344,10 +350,96 @@ function renderFiles(files = []) {
     button.className = "file-item";
     button.type = "button";
     button.dataset.path = file.path;
-    button.innerHTML = `<strong>${file.name}</strong><small>${file.rel} · ${formatBytes(file.size)}</small>`;
+    button.innerHTML = `<strong>${escapeHtml(file.name)}</strong><small>${escapeHtml(file.rel)} · ${formatBytes(file.size)}</small>`;
     button.addEventListener("click", () => loadFile(file.path, button));
     list.append(button);
   }
+}
+
+function showFolderDialog() {
+  const dialog = $("#folderDialog");
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+    return;
+  }
+  dialog.setAttribute("open", "");
+}
+
+function closeFolderDialog() {
+  const dialog = $("#folderDialog");
+  if (typeof dialog.close === "function" && dialog.open) {
+    dialog.close();
+    return;
+  }
+  dialog.removeAttribute("open");
+}
+
+async function openFolderBrowser() {
+  showFolderDialog();
+  await browseFolders($("#folderPath").value || state.root);
+}
+
+async function browseFolders(folderPath) {
+  setStatus(`Browsing ${targetLabel()} folders...`);
+  const result = await api("/api/browse-folders", { path: folderPath || state.root });
+  state.folderBrowser = {
+    root: result.root,
+    parent: result.parent || "",
+    entries: result.entries || [],
+    places: result.places || []
+  };
+  renderFolderBrowser(result);
+  setStatus(`${targetLabel()} · folder browser ready`);
+}
+
+function renderFolderBrowser(result) {
+  $("#folderBrowserTarget").textContent = targetLabel();
+  $("#folderBrowserPath").value = result.root;
+  $("#folderUp").disabled = !result.parent;
+
+  const places = $("#folderPlaces");
+  places.innerHTML = "";
+  for (const place of result.places || []) {
+    const button = document.createElement("button");
+    button.className = "folder-place";
+    button.type = "button";
+    button.textContent = place.name;
+    button.classList.toggle("active", place.path === result.root);
+    button.addEventListener("click", () => browseFolders(place.path).catch(showError));
+    places.append(button);
+  }
+
+  const entries = $("#folderEntries");
+  entries.innerHTML = "";
+  if (!result.entries?.length) {
+    const empty = document.createElement("div");
+    empty.className = "folder-empty";
+    empty.textContent = "No folders";
+    entries.append(empty);
+    return;
+  }
+
+  for (const folder of result.entries) {
+    const button = document.createElement("button");
+    const name = document.createElement("strong");
+    const detail = document.createElement("small");
+    button.className = "folder-entry";
+    button.type = "button";
+    name.textContent = folder.symlink ? `${folder.name} ->` : folder.name;
+    detail.textContent = folder.path;
+    button.append(name, detail);
+    button.addEventListener("click", () => browseFolders(folder.path).catch(showError));
+    entries.append(button);
+  }
+}
+
+async function selectBrowsedFolder() {
+  const chosen = state.folderBrowser.root || $("#folderBrowserPath").value;
+  if (!chosen) return;
+  $("#folderPath").value = chosen;
+  state.root = chosen;
+  closeFolderDialog();
+  await scanFiles();
 }
 
 async function scanFiles() {
@@ -745,6 +837,18 @@ function wireEvents() {
     connectTarget().catch(showError);
   });
 
+  $("#browseFolder").addEventListener("click", () => openFolderBrowser().catch(showError));
+  $("#closeFolderDialog").addEventListener("click", closeFolderDialog);
+  $("#folderUp").addEventListener("click", () => {
+    if (state.folderBrowser.parent) browseFolders(state.folderBrowser.parent).catch(showError);
+  });
+  $("#folderGo").addEventListener("click", () => browseFolders($("#folderBrowserPath").value).catch(showError));
+  $("#folderBrowserPath").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    browseFolders($("#folderBrowserPath").value).catch(showError);
+  });
+  $("#selectFolder").addEventListener("click", () => selectBrowsedFolder().catch(showError));
   $("#scanFiles").addEventListener("click", () => scanFiles().catch(showError));
   $("#loadSample").addEventListener("click", () => {
     state.currentFileName = "snippet.c";

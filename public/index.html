@@ -57,10 +57,13 @@
 
       <section class="workspace" data-panel="compile">
         <section class="controls-strip" aria-label="Compile controls">
-          <label>
-            Source folder
-            <input id="folderPath" type="text" autocomplete="off">
-          </label>
+          <div class="path-picker-field">
+            <label>
+              Source folder
+              <input id="folderPath" type="text" autocomplete="off">
+            </label>
+            <button id="browseFolder" class="secondary-button" type="button">Browse</button>
+          </div>
           <button id="scanFiles" class="secondary-button" type="button">Scan</button>
           <label>
             Optimization
@@ -186,6 +189,28 @@
         </section>
       </section>
     </main>
+
+    <dialog id="folderDialog" class="folder-dialog" aria-labelledby="folderDialogTitle">
+      <div class="folder-dialog-inner">
+        <div class="folder-dialog-heading">
+          <div>
+            <h2 id="folderDialogTitle">Choose Folder</h2>
+            <p id="folderBrowserTarget"></p>
+          </div>
+          <button id="closeFolderDialog" class="text-button" type="button">Close</button>
+        </div>
+        <div class="folder-path-row">
+          <button id="folderUp" class="secondary-button" type="button">Up</button>
+          <input id="folderBrowserPath" type="text" autocomplete="off" aria-label="Folder path">
+          <button id="folderGo" class="secondary-button" type="button">Go</button>
+        </div>
+        <div id="folderPlaces" class="folder-places" aria-label="Common folders"></div>
+        <div id="folderEntries" class="folder-entries" aria-label="Folders"></div>
+        <div class="folder-dialog-actions">
+          <button id="selectFolder" class="primary-button" type="button">Select Folder</button>
+        </div>
+      </div>
+    </dialog>
 
     <script src="/app.js"></script>
   </body>

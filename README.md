@@ -33,6 +33,16 @@ npm run start-server
 
 Open the URL printed in the terminal.
 
+## Setup
+
+Install or check the non-Python dependencies:
+
+```sh
+./setup.sh
+```
+
+Use `./setup.sh --check-only` for a dry check, or `./setup.sh --with-tailscale` on machines where you also want the script to install the Tailscale CLI/daemon. The required tools are Node.js/npm 18+, `clang`, `nm`, `ps`, and `lsof`. Optional tools include Tailscale, `uv`, `objdump`/`otool`, `vmmap`, and `dtruss`.
+
 ## CLI
 
 Interactive menu:
@@ -60,6 +70,8 @@ python3 main.py --mode health
 python3 main.py --mode url
 python3 main.py --mode stop
 ```
+
+You can invoke the wrapper with `uv run python main.py`, but `uv` only manages the Python launcher environment. The viewer server still requires Node.js 18+. The launcher checks `PATH`, login-shell paths, Homebrew, nvm, asdf, and Volta locations; if needed, set `UTH_NODE=/path/to/node`.
 
 ## View the browser over Tailscale
 

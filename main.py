@@ -35,6 +35,11 @@ DEFAULT_PORT = int(os.environ.get("PORT", "5173"))
 DEFAULT_BIND = os.environ.get("UTH_BIND", "tailnet")
 HEALTH_PATH = "/api/health"
 PORT_SCAN_ATTEMPTS = 21
+COMMON_NODE_PATHS = (
+    "/opt/homebrew/bin/node",
+    "/usr/local/bin/node",
+    "/usr/bin/node",
+)
 
 
 @dataclass
@@ -259,14 +264,71 @@ def process_command(pid: int) -> str:
     return result.stdout.strip()
 
 
+def executable_file(value: str | Path | None) -> bool:
+    if not value:
+        return False
+    try:
+        candidate = Path(value).expanduser()
+        return candidate.is_file() and os.access(candidate, os.X_OK)
+    except OSError:
+        return False
+
+
+def node_from_login_shell() -> str:
+    shells = unique([os.environ.get("SHELL", ""), "/bin/zsh", "/bin/bash", "/bin/sh"])
+    for shell in shells:
+        if not executable_file(shell):
+            continue
+        try:
+            result = subprocess.run(
+                [shell, "-lc", "command -v node"],
+                text=True,
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        candidate = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if executable_file(candidate):
+            return candidate
+    return ""
+
+
+def version_manager_node_paths() -> list[str]:
+    home = Path.home()
+    paths = [
+        home / ".volta" / "bin" / "node",
+        home / ".asdf" / "shims" / "node",
+        home / ".local" / "bin" / "node",
+    ]
+    paths.extend(home.glob(".nvm/versions/node/*/bin/node"))
+    paths.extend(home.glob("Library/pnpm/nodejs/*/bin/node"))
+    return [str(path) for path in paths]
+
+
 def node_binary() -> str:
     configured = os.environ.get("UTH_NODE") or os.environ.get("NODE_BINARY")
     if configured:
-        return configured
-    discovered = shutil.which("node")
-    if discovered:
-        return discovered
-    raise SystemExit("Node.js was not found on PATH. Install Node.js or set UTH_NODE=/path/to/node.")
+        resolved = shutil.which(configured) if os.sep not in configured else configured
+        if executable_file(resolved):
+            return str(Path(resolved).expanduser())
+        raise SystemExit(f"Configured Node.js binary was not executable: {configured}")
+
+    candidates = [
+        shutil.which("node") or "",
+        node_from_login_shell(),
+        *COMMON_NODE_PATHS,
+        *version_manager_node_paths(),
+    ]
+    for candidate in unique(candidates):
+        if executable_file(candidate):
+            return str(Path(candidate).expanduser())
+
+    raise SystemExit(
+        "Node.js was not found. uv only manages the Python launcher environment; "
+        "install Node.js 18+ or set UTH_NODE=/path/to/node."
+    )
 
 
 def start_server(port: int, bind: str, wait_seconds: float) -> None:

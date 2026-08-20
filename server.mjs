@@ -30,6 +30,7 @@ const maxOutputBytes = 2 * 1024 * 1024;
 const textLimit = 220_000;
 const allowedAgentPaths = new Set([
   "/api/health",
+  "/api/browse-folders",
   "/api/list-files",
   "/api/read-file",
   "/api/compile",
@@ -779,6 +780,90 @@ async function listFiles(rootPath) {
     root,
     files,
     truncated: files.length >= maxFiles
+  };
+}
+
+async function directoryExists(directoryPath) {
+  try {
+    return (await stat(directoryPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function folderPlaces() {
+  const home = os.homedir();
+  const candidates = [
+    ["Project", defaultRoot],
+    ["Home", home],
+    ["Documents", path.join(home, "Documents")],
+    ["Desktop", path.join(home, "Desktop")],
+    ["Downloads", path.join(home, "Downloads")],
+    ["Root", path.parse(defaultRoot).root]
+  ];
+  const places = [];
+  const seen = new Set();
+  for (const [name, rawPath] of candidates) {
+    const resolved = normalizeIncomingPath(rawPath);
+    if (seen.has(resolved) || !(await directoryExists(resolved))) continue;
+    seen.add(resolved);
+    places.push({ name, path: resolved });
+  }
+  return places;
+}
+
+async function browseFolders(folderPath) {
+  let root = normalizeIncomingPath(folderPath);
+  let rootInfo;
+  try {
+    rootInfo = await stat(root);
+  } catch (error) {
+    throw new Error(`Folder not found: ${root}. ${error.message}`);
+  }
+  if (!rootInfo.isDirectory()) {
+    root = path.dirname(root);
+  }
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`Cannot read folder: ${root}. ${error.message}`);
+  }
+
+  const folders = [];
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    let isDirectory = entry.isDirectory();
+    const symlink = entry.isSymbolicLink();
+    if (!isDirectory && symlink) {
+      try {
+        isDirectory = (await stat(fullPath)).isDirectory();
+      } catch {
+        isDirectory = false;
+      }
+    }
+    if (!isDirectory) continue;
+    folders.push({
+      name: entry.name,
+      path: fullPath,
+      hidden: entry.name.startsWith("."),
+      symlink
+    });
+  }
+
+  folders.sort((a, b) => {
+    if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+
+  const parent = path.dirname(root);
+  return {
+    root,
+    parent: parent === root ? "" : parent,
+    entries: folders.slice(0, 500),
+    places: await folderPlaces(),
+    truncated: folders.length > 500
   };
 }
 
@@ -1686,6 +1771,11 @@ async function routeApi(req, res) {
 
     if (url.pathname === "/api/agent/proxy") {
       json(res, 200, await proxyAgentRequest(body));
+      return;
+    }
+
+    if (url.pathname === "/api/browse-folders") {
+      json(res, 200, { ok: true, ...(await browseFolders(body.path || body.root)) });
       return;
     }
 

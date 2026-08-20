@@ -238,6 +238,22 @@ input[type="text"] {
   width: min(42vw, 42rem);
 }
 
+.path-picker-field {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+  width: min(100%, 46rem);
+}
+
+.path-picker-field label {
+  flex: 1;
+  min-width: 18rem;
+}
+
+.path-picker-field input[type="text"] {
+  width: 100%;
+}
+
 input[type="number"] {
   width: 10rem;
 }
@@ -503,6 +519,128 @@ textarea {
   background: linear-gradient(90deg, var(--teal), var(--lime));
 }
 
+.folder-dialog {
+  width: min(58rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0;
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.folder-dialog::backdrop {
+  background: rgba(17, 23, 22, 0.42);
+}
+
+.folder-dialog-inner {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--panel);
+}
+
+.folder-dialog-heading,
+.folder-path-row,
+.folder-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.folder-dialog-heading {
+  justify-content: space-between;
+}
+
+.folder-dialog-heading h2,
+.folder-dialog-heading p {
+  margin: 0;
+}
+
+.folder-dialog-heading h2 {
+  font-size: 1rem;
+}
+
+.folder-dialog-heading p {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.folder-path-row input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.folder-places {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.folder-place {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f3f5f0;
+  color: var(--ink);
+  padding: 0 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.folder-place.active {
+  border-color: rgba(20, 116, 111, 0.25);
+  background: var(--soft-teal);
+}
+
+.folder-entries {
+  display: grid;
+  gap: 0.4rem;
+  max-height: min(54vh, 30rem);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #fbfcf9;
+}
+
+.folder-entry {
+  display: grid;
+  gap: 0.2rem;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+}
+
+.folder-entry:hover {
+  border-color: rgba(20, 116, 111, 0.25);
+  background: var(--soft-teal);
+}
+
+.folder-entry small,
+.folder-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.folder-empty {
+  padding: 0.8rem;
+}
+
+.folder-dialog-actions {
+  justify-content: flex-end;
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -553,6 +691,15 @@ textarea {
   .controls-strip {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .path-picker-field {
+    display: grid;
+    width: 100%;
+  }
+
+  .path-picker-field label {
+    min-width: 0;
   }
 
   input[type="text"],
