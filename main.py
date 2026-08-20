@@ -146,21 +146,21 @@ def normalize_base_url(raw_url: str) -> str:
     return url
 
 
-def candidate_base_urls(port: int, scan_ports: bool = True) -> list[str]:
+def candidate_base_urls(port: int, scan_ports: bool = True, include_tailnet: bool = True) -> list[str]:
     ports = range(port, port + PORT_SCAN_ATTEMPTS) if scan_ports else range(port, port + 1)
     urls: list[str] = []
 
-    for key in ("UTH_HEALTH_URL", "UTH_PUBLIC_URL", "UTH_FUNNEL_URL"):
-        configured = os.environ.get(key)
-        if configured:
-            urls.append(normalize_base_url(configured))
+    configured = os.environ.get("UTH_HEALTH_URL")
+    if configured:
+        urls.append(normalize_base_url(configured))
 
     for current_port in ports:
         urls.append(f"http://127.0.0.1:{current_port}")
 
-    for address in detect_tailscale_addresses():
-        for current_port in ports:
-            urls.append(f"http://{format_host_for_url(address)}:{current_port}")
+    if include_tailnet:
+        for address in detect_tailscale_addresses():
+            for current_port in ports:
+                urls.append(f"http://{format_host_for_url(address)}:{current_port}")
 
     return unique(urls)
 
@@ -177,9 +177,14 @@ def fetch_health_at(base_url: str, timeout: float) -> HealthResult:
     return HealthResult(base_url=normalize_base_url(base_url), payload=payload)
 
 
-def read_health(port: int, timeout: float = 0.5, scan_ports: bool = True) -> HealthResult:
+def read_health(
+    port: int,
+    timeout: float = 2.0,
+    scan_ports: bool = True,
+    include_tailnet: bool = True,
+) -> HealthResult:
     errors: list[str] = []
-    for base_url in candidate_base_urls(port, scan_ports=scan_ports):
+    for base_url in candidate_base_urls(port, scan_ports=scan_ports, include_tailnet=include_tailnet):
         try:
             return fetch_health_at(base_url, timeout=timeout)
         except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, RuntimeError) as error:
@@ -338,13 +343,13 @@ def start_server(port: int, bind: str, wait_seconds: float) -> None:
     if pid:
         print(f"Server is already managed by this launcher (PID {pid}).")
         try:
-            print(f"URL: {best_url(read_health(port, timeout=0.5))}")
+            print(f"URL: {best_url(read_health(port, timeout=2.0, include_tailnet=False))}")
         except RuntimeError as error:
             print(f"Health check did not answer yet: {error}")
         return
 
     try:
-        existing = read_health(port, timeout=0.35)
+        existing = read_health(port, timeout=1.0, include_tailnet=False)
         print(f"A viewer is already answering health at {existing.base_url} (PID {existing.payload.get('pid')}).")
         print(f"URL: {best_url(existing)}")
         print("No new process was started.")
@@ -388,7 +393,7 @@ def start_server(port: int, bind: str, wait_seconds: float) -> None:
             tail_log(LOG_FILE, lines=20)
             raise SystemExit(1)
         try:
-            result = read_health(port, timeout=0.35)
+            result = read_health(port, timeout=2.0, include_tailnet=False)
             print(f"URL: {best_url(result)}")
             return
         except RuntimeError as error:
@@ -441,13 +446,13 @@ def stop_server(force: bool = False) -> None:
 
 
 def check_health(port: int) -> None:
-    result = read_health(port, timeout=0.75)
+    result = read_health(port, timeout=3.0)
     print_health(result)
 
 
 def print_url(port: int) -> None:
     try:
-        print(best_url(read_health(port, timeout=0.5)))
+        print(best_url(read_health(port, timeout=2.0, include_tailnet=False)))
         return
     except RuntimeError:
         url = tailnet_url(port)
@@ -549,7 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", help="Mode alias for compatibility with other local launchers")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Viewer port (default: {DEFAULT_PORT})")
     parser.add_argument("--bind", default=DEFAULT_BIND, help=f"Bind mode/host for server start (default: {DEFAULT_BIND})")
-    parser.add_argument("--wait", type=float, default=10, help="Seconds to wait for health after starting")
+    parser.add_argument("--wait", type=float, default=20, help="Seconds to wait for health after starting")
     parser.add_argument("--lines", type=int, default=40, help="Log lines to print")
     parser.add_argument("--force", action="store_true", help="Use SIGKILL if stop does not exit cleanly")
     return parser

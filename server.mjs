@@ -484,26 +484,17 @@ function normalizeOptionalPublicUrl(value) {
 
 function extractFunnelUrls(config, localPort) {
   const matches = [];
-  const fallbacks = [];
   const seen = new Set();
 
   function addUrl(sourceConfig, hostPort, mount = "/", target = "") {
     if (!hostPort || !isFunnelAllowed(sourceConfig, hostPort)) return;
+    if (!proxyTargetsPort(target, localPort)) return;
     const parsed = parseHostPort(hostPort);
     if (!parsed.host) return;
     const url = buildFunnelUrl(parsed.host, parsed.port, mount);
     if (!url || seen.has(url)) return;
     seen.add(url);
-
-    const row = {
-      url,
-      score: proxyTargetsPort(target, localPort) ? 0 : 1
-    };
-    if (row.score === 0) {
-      matches.push(row);
-    } else {
-      fallbacks.push(row);
-    }
+    matches.push(url);
   }
 
   collectFunnelUrlsFromConfig(config, addUrl);
@@ -514,7 +505,7 @@ function extractFunnelUrls(config, localPort) {
     collectFunnelUrlsFromConfig(service, addUrl);
   }
 
-  return [...matches, ...fallbacks].map((row) => row.url);
+  return matches;
 }
 
 function collectFunnelUrlsFromConfig(config, addUrl) {

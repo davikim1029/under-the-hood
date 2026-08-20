@@ -73,6 +73,8 @@ python3 main.py --mode stop
 
 You can invoke the wrapper with `uv run python main.py`, but `uv` only manages the Python launcher environment. The viewer server still requires Node.js 18+. The launcher checks `PATH`, login-shell paths, Homebrew, nvm, asdf, and Volta locations; if needed, set `UTH_NODE=/path/to/node`.
 
+The launcher never kills or replaces another service that already owns a port. If the requested port is occupied, the Node server moves to the next available port and prints the actual URL. For Funnel setups, make sure the Funnel rule proxies to that printed port. Automatic Funnel detection only advertises routes whose Tailscale Serve/Funnel target matches the viewer's active port; otherwise it falls back to the Tailnet URL.
+
 ## View the browser over Tailscale
 
 To make this viewer reachable from your other Tailnet devices, start it in Tailnet mode:
