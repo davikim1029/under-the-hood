@@ -1,0 +1,24 @@
+{
+  "name": "under-the-hood-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "under-the-hood": "./cli.mjs"
+  },
+  "scripts": {
+    "cli": "node cli.mjs",
+    "dev": "node server.mjs",
+    "tailnet": "UTH_BIND=tailnet node server.mjs",
+    "agent": "UTH_BIND=0.0.0.0 node server.mjs",
+    "funnel": "tailscale funnel --bg 5173",
+    "start-server": "node cli.mjs start",
+    "health": "node cli.mjs health",
+    "url": "node cli.mjs url",
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check cli.mjs && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

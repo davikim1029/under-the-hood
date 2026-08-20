@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Under the Hood Viewer</title>
+    <meta
+      name="description"
+      content="A local compile, save, and process inspection viewer for exploring how programs move from source to lower-level machine artifacts."
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">UH</span>
+        <div>
+          <h1>Under the Hood</h1>
+          <p>Compile path, save bytes, and process memory maps.</p>
+        </div>
+      </div>
+      <div class="runtime">
+        <span id="runtimeStatus">Starting local tools...</span>
+      </div>
+      <div class="target-switcher" aria-label="Machine target">
+        <label>
+          Target
+          <select id="targetSelect">
+            <option value="local">Local</option>
+          </select>
+        </label>
+        <label>
+          Agent URL
+          <input id="targetUrl" type="text" autocomplete="off" placeholder="http://name.tailnet.ts.net:5173">
+        </label>
+        <button id="discoverTargets" class="secondary-button" type="button">Discover</button>
+        <button id="connectTarget" class="secondary-button" type="button">Connect</button>
+      </div>
+      <div id="accessLinks" class="access-links" aria-label="Viewer access URLs"></div>
+    </header>
+
+    <main class="app-shell">
+      <nav class="mode-rail" aria-label="Viewer mode">
+        <button class="mode-button active" type="button" data-mode="compile">
+          <span class="mode-icon">01</span>
+          <span>Compile</span>
+        </button>
+        <button class="mode-button" type="button" data-mode="save">
+          <span class="mode-icon">02</span>
+          <span>Save Trace</span>
+        </button>
+        <button class="mode-button" type="button" data-mode="process">
+          <span class="mode-icon">03</span>
+          <span>PID Map</span>
+        </button>
+      </nav>
+
+      <section class="workspace" data-panel="compile">
+        <section class="controls-strip" aria-label="Compile controls">
+          <label>
+            Source folder
+            <input id="folderPath" type="text" autocomplete="off">
+          </label>
+          <button id="scanFiles" class="secondary-button" type="button">Scan</button>
+          <label>
+            Optimization
+            <select id="optimization">
+              <option value="-O0">-O0</option>
+              <option value="-O1">-O1</option>
+              <option value="-O2">-O2</option>
+              <option value="-O3">-O3</option>
+              <option value="-Os">-Os</option>
+            </select>
+          </label>
+          <label>
+            Function
+            <select id="functionSelect">
+              <option value="">All functions</option>
+            </select>
+          </label>
+          <button id="compileButton" class="primary-button" type="button">Compile</button>
+        </section>
+
+        <section class="main-grid">
+          <aside class="file-panel" aria-label="Source files">
+            <div class="panel-heading">
+              <h2>Files</h2>
+              <button id="loadSample" class="text-button" type="button">Sample</button>
+            </div>
+            <div id="fileList" class="file-list"></div>
+          </aside>
+
+          <section class="editor-panel" aria-label="Source editor">
+            <div class="panel-heading">
+              <h2 id="currentFileName">snippet.c</h2>
+              <span id="sourceHash" class="tiny-label"></span>
+            </div>
+            <textarea id="sourceEditor" spellcheck="false"></textarea>
+          </section>
+
+          <section class="inspector-panel" aria-label="Compile inspector">
+            <canvas id="pipelineCanvas" width="980" height="220" aria-label="Compile pipeline visualization"></canvas>
+            <div id="stageList" class="stage-list"></div>
+          </section>
+        </section>
+
+        <section class="result-tabs" aria-label="Compile artifacts">
+          <div class="tab-list" role="tablist">
+            <button class="artifact-tab active" type="button" data-artifact="assembly">Assembly</button>
+            <button class="artifact-tab" type="button" data-artifact="disassembly">Machine Code</button>
+            <button class="artifact-tab" type="button" data-artifact="llvmIr">LLVM IR</button>
+            <button class="artifact-tab" type="button" data-artifact="symbols">Symbols</button>
+            <button class="artifact-tab" type="button" data-artifact="callGraph">Calls</button>
+          </div>
+          <pre id="artifactOutput" class="artifact-output"></pre>
+        </section>
+      </section>
+
+      <section class="workspace hidden" data-panel="save">
+        <section class="controls-strip" aria-label="Save controls">
+          <label>
+            Save path
+            <input id="savePath" type="text" autocomplete="off">
+          </label>
+          <label>
+            Optimization
+            <select id="saveOptimization">
+              <option value="-O0">-O0</option>
+              <option value="-O2">-O2</option>
+            </select>
+          </label>
+          <label class="check-row">
+            <input id="attemptDtruss" type="checkbox">
+            <span>Attempt dtruss</span>
+          </label>
+          <button id="runSaveTrace" class="primary-button" type="button">Run Save</button>
+        </section>
+
+        <section class="save-grid">
+          <section class="editor-panel" aria-label="Save source editor">
+            <div class="panel-heading">
+              <h2>save_probe.c</h2>
+              <button id="saveSample" class="text-button" type="button">Sample</button>
+            </div>
+            <textarea id="saveEditor" spellcheck="false"></textarea>
+          </section>
+
+          <section class="inspector-panel" aria-label="Save layers">
+            <div id="saveLayers" class="layer-list"></div>
+          </section>
+        </section>
+
+        <section class="result-tabs" aria-label="Save artifacts">
+          <div class="tab-list" role="tablist">
+            <button class="save-tab active" type="button" data-save="hexDump">Hex Dump</button>
+            <button class="save-tab" type="button" data-save="stdout">Program Output</button>
+            <button class="save-tab" type="button" data-save="syscalls">Syscalls</button>
+          </div>
+          <pre id="saveOutput" class="artifact-output"></pre>
+        </section>
+      </section>
+
+      <section class="workspace hidden" data-panel="process">
+        <section class="controls-strip" aria-label="Process controls">
+          <label>
+            PID
+            <input id="pidInput" type="number" min="1" step="1">
+          </label>
+          <button id="inspectPid" class="primary-button" type="button">Inspect</button>
+        </section>
+
+        <section class="process-layout">
+          <section class="inspector-panel" aria-label="Process map">
+            <div id="processSummary" class="stage-list"></div>
+            <div id="vmmapHistogram" class="histogram"></div>
+          </section>
+
+          <section class="result-tabs" aria-label="Process output">
+            <div class="tab-list" role="tablist">
+              <button class="process-tab active" type="button" data-process="ps">Process</button>
+              <button class="process-tab" type="button" data-process="vmmap">vmmap</button>
+              <button class="process-tab" type="button" data-process="lsof">Open Files</button>
+            </div>
+            <pre id="processOutput" class="artifact-output"></pre>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
