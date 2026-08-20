@@ -58,6 +58,7 @@ npm run start-server
 npm run health
 npm run url
 npm run stop-server
+npm run restart-server
 ```
 
 `npm run start-server` uses `main.py` to start `server.mjs` as a detached background process, so the launcher can exit without stopping the viewer. It writes `logs/under_the_hood.pid` and `logs/under_the_hood.log`.
@@ -69,6 +70,7 @@ python3 main.py --mode start-server
 python3 main.py --mode health
 python3 main.py --mode url
 python3 main.py --mode stop
+python3 main.py --mode restart
 ```
 
 You can invoke the wrapper with `uv run python main.py`, but `uv` only manages the Python launcher environment. The viewer server still requires Node.js 18+. The launcher checks `PATH`, login-shell paths, Homebrew, nvm, asdf, and Volta locations; if needed, set `UTH_NODE=/path/to/node`.

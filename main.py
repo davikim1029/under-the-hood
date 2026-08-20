@@ -445,6 +445,11 @@ def stop_server(force: bool = False) -> None:
         print("Server is still running. Re-run with --force if it does not exit cleanly.")
 
 
+def restart_server(port: int, bind: str, wait_seconds: float, force: bool = False) -> None:
+    stop_server(force=force)
+    start_server(port, bind, wait_seconds)
+
+
 def check_health(port: int) -> None:
     result = read_health(port, timeout=3.0)
     print_health(result)
@@ -494,8 +499,9 @@ def show_menu(args: argparse.Namespace) -> None:
         print("2. Check health")
         print("3. Print URL")
         print("4. Stop server")
-        print("5. Show logs")
-        print("6. Quit")
+        print("5. Restart server")
+        print("6. Show logs")
+        print("7. Quit")
         choice = input("\nChoose an option: ").strip().lower()
 
         try:
@@ -511,10 +517,13 @@ def show_menu(args: argparse.Namespace) -> None:
             elif choice in ("4", "stop"):
                 stop_server(force=args.force)
                 pause()
-            elif choice in ("5", "logs", "log"):
+            elif choice in ("5", "restart", "restart-server"):
+                restart_server(args.port, args.bind, args.wait, force=args.force)
+                pause()
+            elif choice in ("6", "logs", "log"):
                 tail_log(lines=args.lines)
                 pause()
-            elif choice in ("6", "q", "quit", "exit"):
+            elif choice in ("7", "q", "quit", "exit"):
                 return
             else:
                 print("Unknown option.")
@@ -542,6 +551,8 @@ def run_mode(mode: str, args: argparse.Namespace) -> None:
         print_url(args.port)
     elif normalized == "stop":
         stop_server(force=args.force)
+    elif normalized in ("restart", "restart-server"):
+        restart_server(args.port, args.bind, args.wait, force=args.force)
     elif normalized in ("logs", "log"):
         tail_log(lines=args.lines)
     else:
@@ -550,7 +561,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Under the Hood viewer launcher")
-    parser.add_argument("command", nargs="?", help="menu, start-server, health, url, status, stop, or logs")
+    parser.add_argument("command", nargs="?", help="menu, start-server, health, url, status, stop, restart, or logs")
     parser.add_argument("--mode", help="Mode alias for compatibility with other local launchers")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Viewer port (default: {DEFAULT_PORT})")
     parser.add_argument("--bind", default=DEFAULT_BIND, help=f"Bind mode/host for server start (default: {DEFAULT_BIND})")

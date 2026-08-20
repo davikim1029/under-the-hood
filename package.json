@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "under-the-hood": "./cli.mjs"
+    "under-the-hood": "./main.py"
   },
   "scripts": {
     "cli": "python3 main.py",
@@ -15,6 +15,7 @@
     "funnel": "tailscale funnel --bg 5173",
     "start-server": "python3 main.py --mode start-server",
     "stop-server": "python3 main.py --mode stop",
+    "restart-server": "python3 main.py --mode restart",
     "health": "python3 main.py --mode health",
     "url": "python3 main.py --mode url",
     "start": "node server.mjs",
