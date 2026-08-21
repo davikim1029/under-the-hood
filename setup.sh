@@ -680,13 +680,48 @@ tailscale_funnel_help() {
   "$cli" funnel --help 2>&1 || true
 }
 
+tailscale_cli_version() {
+  local cli="$1"
+  "$cli" version 2>/dev/null | tr -d '\r' | sed -n -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/p' | head -n 1
+}
+
+version_at_least() {
+  local actual="$1" required="$2"
+  node - "$actual" "$required" <<'NODE'
+const [actual, required] = process.argv.slice(2);
+function parts(value) {
+  return String(value || "").split(".").map((part) => Number.parseInt(part, 10));
+}
+const a = parts(actual);
+const r = parts(required);
+for (let index = 0; index < 3; index += 1) {
+  const left = Number.isFinite(a[index]) ? a[index] : 0;
+  const right = Number.isFinite(r[index]) ? r[index] : 0;
+  if (left > right) process.exit(0);
+  if (left < right) process.exit(1);
+}
+process.exit(0);
+NODE
+}
+
 require_supported_funnel_cli() {
-  local cli="$1" help_text
-  help_text="$(tailscale_funnel_help "$cli")"
-  if ! grep -q -- '--https' <<<"$help_text"; then
-    fail_setup "This Windows Tailscale CLI does not appear to support the current Funnel syntax. Upgrade Windows Tailscale to 1.52+."
+  local cli="$1" version help_text
+  version="$(tailscale_cli_version "$cli")"
+  if [[ -n "$version" ]]; then
+    if version_at_least "$version" "1.52.0"; then
+      ok " Windows Tailscale CLI $cli ($version)"
+      return 0
+    fi
+    fail_setup "Windows Tailscale CLI $cli is version $version. Upgrade Windows Tailscale to 1.52+ for the current Funnel syntax."
     return 1
   fi
+
+  help_text="$(tailscale_funnel_help "$cli")"
+  if ! grep -q -- '--https' <<<"$help_text"; then
+    fail_setup "Could not read the Windows Tailscale CLI version or current Funnel flags from $cli. Run '$cli version' from WSL to verify it."
+    return 1
+  fi
+  ok " Windows Tailscale CLI $cli"
 }
 
 run_windows_funnel_command() {
@@ -856,6 +891,15 @@ check_optional_tools() {
   else
     warn "Tailscale CLI unavailable; Tailnet discovery/Funnel detection will be limited."
   fi
+  if running_in_wsl; then
+    local windows_tailscale_cli windows_tailscale_version
+    if windows_tailscale_cli="$(resolve_windows_tailscale)"; then
+      windows_tailscale_version="$(tailscale_cli_version "$windows_tailscale_cli" || true)"
+      ok " Windows Tailscale CLI ${windows_tailscale_cli}${windows_tailscale_version:+ ($windows_tailscale_version)}"
+    else
+      warn "Windows Tailscale CLI not found under /mnt/c; Windows-level Funnel setup will be unavailable."
+    fi
+  fi
   have uv && ok " uv available" || warn "uv unavailable; Python analysis will fall back to plain python."
 }
 
@@ -867,6 +911,13 @@ print_versions() {
   have nm && printf 'nm: %s\n' "$(command -v nm)" || printf 'nm: missing\n'
   have lsof && printf 'lsof: %s\n' "$(command -v lsof)" || printf 'lsof: missing\n'
   resolve_tailscale >/dev/null 2>&1 && printf 'tailscale: %s\n' "$(resolve_tailscale)" || true
+  if running_in_wsl; then
+    local windows_tailscale_cli windows_tailscale_version
+    if windows_tailscale_cli="$(resolve_windows_tailscale)"; then
+      windows_tailscale_version="$(tailscale_cli_version "$windows_tailscale_cli" || true)"
+      printf 'windows tailscale: %s%s\n' "$windows_tailscale_cli" "${windows_tailscale_version:+ ($windows_tailscale_version)}"
+    fi
+  fi
   have uv && printf 'uv: %s\n' "$(uv --version)" || true
 }
 
