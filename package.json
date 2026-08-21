@@ -11,7 +11,6 @@
     "node-cli": "node cli.mjs",
     "dev": "node server.mjs",
     "tailnet": "UTH_BIND=tailnet node server.mjs",
-    "agent": "UTH_BIND=0.0.0.0 node server.mjs",
     "funnel": "sh scripts/tailscale.sh funnel --bg ${PORT:-5173}",
     "start-server": "python3 main.py --mode start-server",
     "stop-server": "python3 main.py --mode stop",

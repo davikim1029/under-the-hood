@@ -12,7 +12,6 @@ A local lab for seeing how source code becomes lower-level artifacts, and how sa
 - Run a save-focused C demo, then inspect stdout, file metadata, and a hex dump of the saved bytes.
 - Optionally record the save's syscalls: `strace` on Linux and WSL, `dtruss` on macOS.
 - Inspect a PID with read-only process metadata and memory-map output. Linux and WSL read `/proc/<pid>/maps` directly; macOS shells out to `vmmap` where the OS allows it.
-- Select Local or a Tailscale-reachable agent as the machine that performs the work.
 
 ## Why it is local
 
@@ -54,7 +53,7 @@ Install or check the non-Python dependencies:
 ./setup.sh
 ```
 
-Use `./setup.sh --check-only` for a dry check, or `./setup.sh --with-tailscale` on machines where you also want the script to install the Tailscale CLI/daemon. The required tools are Node.js/npm 18+, `clang`, `nm`, `ps`, and `lsof`. Optional tools include Tailscale, `uv`, `objdump`/`otool`, `strace` (Linux/WSL syscall tracing), and `vmmap`/`dtruss` (macOS).
+Use `./setup.sh --check-only` for a dry check, or `./setup.sh --with-tailscale` on machines where you also want the script to install the Tailscale CLI/daemon. The required tools are Node.js/npm 18+, `clang`, `nm`, `ps`, and `lsof`. Setup also attempts to install `strace` on Linux/WSL when it is missing so save syscall tracing can work. Optional tools include Tailscale, `uv`, `objdump`/`otool`, and `vmmap`/`dtruss` (macOS).
 
 In WSL with Tailscale running on Windows, configure the Windows-level public Funnel explicitly:
 
@@ -158,31 +157,4 @@ When a matching Funnel entry proxies to the viewer's local port, `/api/health` r
 
 Funnel is public internet exposure. Use it only when you are comfortable exposing this local inspection tool beyond the Tailnet.
 
-## Tailnet agents
-
-Run this project on every machine you want to inspect. The viewer talks to the selected agent over HTTP, and Tailscale supplies the private network path.
-
-On the machine where you want the browser UI:
-
-```sh
-npm run dev
-```
-
-On another Tailnet machine, prefer binding to that machine's Tailscale IP:
-
-```sh
-npm run tailnet
-```
-
-You can also bind on every interface when the host firewall and network are trusted:
-
-```sh
-npm run agent
-```
-
-Then add `http://100.x.y.z:5173` or `http://machine-name.tailnet-name.ts.net:5173` in the viewer's Agent URL field and press Connect.
-
-If the `tailscale` CLI is installed on the viewer machine, Discover will use `tailscale status --json` to suggest peers. Discovery does not prove that the Under the Hood agent is running on those peers; Connect performs that health check.
-
-The built-in proxy only forwards known viewer API calls to localhost, Tailscale `100.64.0.0/10` addresses, Tailscale IPv6 addresses, or `.ts.net` MagicDNS names.
 # under-the-hood

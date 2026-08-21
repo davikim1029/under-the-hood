@@ -434,6 +434,40 @@ install_linux_packages() {
   esac
 }
 
+ensure_strace_linux() {
+  if have strace; then
+    ok " strace available"
+    return 0
+  fi
+
+  local manager package status
+  if ! manager="$(detect_linux_package_manager)"; then
+    warn "strace not found and no supported Linux package manager was detected; save syscall tracing will be unavailable."
+    return 0
+  fi
+
+  package="$(package_for "$manager" strace)"
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    warn "strace not found; setup would attempt to install package '${package}'."
+    return 0
+  fi
+
+  log "Installing strace for save syscall tracing"
+  set +e
+  install_linux_packages "$manager" "$package"
+  status=$?
+  set -e
+  hash -r
+
+  if have strace; then
+    ok " strace available"
+  elif [[ "$status" != "0" ]]; then
+    warn "strace install failed; save syscall tracing will be unavailable."
+  else
+    warn "strace install finished, but strace is still not on PATH."
+  fi
+}
+
 ensure_linux_required() {
   local manager
   if node_ok && have npm && have clang && have nm && have lsof && have ps; then
@@ -973,6 +1007,7 @@ print_versions() {
   have clang && printf 'clang: %s (%s)\n' "$(clang --version | head -n 1)" "$(command -v clang)" || printf 'clang: missing\n'
   have nm && printf 'nm: %s\n' "$(command -v nm)" || printf 'nm: missing\n'
   have lsof && printf 'lsof: %s\n' "$(command -v lsof)" || printf 'lsof: missing\n'
+  have strace && printf 'strace: %s\n' "$(command -v strace)" || true
   resolve_tailscale >/dev/null 2>&1 && printf 'tailscale: %s\n' "$(resolve_tailscale)" || true
   if running_in_wsl; then
     local windows_tailscale_cli windows_tailscale_version
@@ -1036,6 +1071,7 @@ main() {
       ;;
     Linux)
       ensure_linux_required
+      ensure_strace_linux
       install_tailscale_linux
       install_uv_linux
       ;;

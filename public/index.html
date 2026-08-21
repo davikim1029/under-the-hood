@@ -22,20 +22,6 @@
       <div class="runtime">
         <span id="runtimeStatus">Starting local tools...</span>
       </div>
-      <div class="target-switcher" aria-label="Machine target">
-        <label>
-          Target
-          <select id="targetSelect">
-            <option value="local">Local</option>
-          </select>
-        </label>
-        <label>
-          Agent URL
-          <input id="targetUrl" type="text" autocomplete="off" placeholder="http://name.tailnet.ts.net:5173">
-        </label>
-        <button id="discoverTargets" class="secondary-button" type="button">Discover</button>
-        <button id="connectTarget" class="secondary-button" type="button">Connect</button>
-      </div>
       <div id="accessLinks" class="access-links" aria-label="Viewer access URLs"></div>
     </header>
 
@@ -102,7 +88,9 @@
           </section>
 
           <section class="inspector-panel" aria-label="Compile inspector">
-            <canvas id="pipelineCanvas" width="980" height="220" aria-label="Compile pipeline visualization"></canvas>
+            <div class="pipeline-scroll" aria-label="Compile pipeline visualization">
+              <canvas id="pipelineCanvas" width="980" height="220" aria-label="Compile pipeline visualization"></canvas>
+            </div>
             <div id="stageList" class="stage-list"></div>
           </section>
         </section>
@@ -215,6 +203,20 @@
         <div class="folder-dialog-actions">
           <button id="selectFolder" class="primary-button" type="button">Select Folder</button>
         </div>
+      </div>
+    </dialog>
+
+    <dialog id="stageDialog" class="stage-dialog" aria-labelledby="stageDialogTitle">
+      <div class="stage-dialog-inner">
+        <div class="stage-dialog-heading">
+          <div>
+            <h2 id="stageDialogTitle">Stage</h2>
+            <p id="stageDialogKicker"></p>
+          </div>
+          <button id="closeStageDialog" class="text-button" type="button">Close</button>
+        </div>
+        <div id="stageDialogStatus" class="stage-dialog-status"></div>
+        <div id="stageDialogContent" class="stage-dialog-content"></div>
       </div>
     </dialog>
 

@@ -60,15 +60,6 @@ const state = {
   currentFileName: "snippet.c",
   currentFilePath: "",
   currentLanguage: "c",
-  targets: [
-    {
-      id: "local",
-      name: "Local",
-      baseUrl: "",
-      kind: "local"
-    }
-  ],
-  activeTargetId: "local",
   compileResult: null,
   artifact: "assembly",
   saveResult: null,
@@ -76,6 +67,7 @@ const state = {
   processResult: null,
   processArtifact: "ps",
   activeMode: "compile",
+  pipelineHitRegions: [],
   folderBrowser: {
     root: "",
     parent: "",
@@ -95,7 +87,6 @@ let appStarting = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const savedTargetsKey = "under-the-hood.targets";
 
 function resetSavePath() {
   $("#savePath").value = "";
@@ -130,6 +121,171 @@ function updateArtifactTabLabels(language = state.currentLanguage) {
     button.textContent = labels[button.dataset.artifact] || button.textContent;
   });
 }
+
+const pipelineModels = {
+  c: [
+    { key: "source", label: "Source", color: "#17211f" },
+    { key: "preprocess", label: "Preprocess", color: "#14746f" },
+    { key: "llvm", label: "LLVM IR", color: "#8cae33" },
+    { key: "assembly", label: "Assembly", color: "#c44e2e" },
+    { key: "object", label: "Object", color: "#48506b" },
+    { key: "link", label: "Link", color: "#0c5652" },
+    { key: "disassemble", label: "Machine", color: "#111716" }
+  ],
+  python: [
+    { key: "source", label: "Source", color: "#17211f" },
+    { key: "project", label: "Project", color: "#14746f" },
+    { key: "ast", label: "AST", color: "#8cae33" },
+    { key: "compile", label: "Code Obj", color: "#c44e2e" },
+    { key: "bytecode", label: "Bytecode", color: "#48506b" },
+    { key: "imports", label: "Imports", color: "#0c5652" },
+    { key: "dependencies", label: "Deps", color: "#111716" }
+  ]
+};
+
+const stageCatalog = {
+  c: {
+    source: {
+      title: "Source",
+      kicker: "Human-readable C text before the toolchain transforms it.",
+      sections: [
+        ["What it is", "This is the program as written: names, functions, types, expressions, comments, and preprocessor directives. It is easy for humans to read, but the CPU cannot execute this text directly."],
+        ["Role in compilation", "The compiler reads the source file, tokenizes it, checks grammar and types, and uses it as the starting point for every lower-level artifact shown in this viewer."],
+        ["How it affects running code", "Names like total or square do not usually survive as runtime objects. They guide the compiler as it chooses registers, stack slots, control flow, and machine instructions."]
+      ]
+    },
+    preprocess: {
+      title: "Preprocess",
+      kicker: "Header includes, macros, and conditional compilation expanded into one C translation unit.",
+      sections: [
+        ["What it is", "The preprocessor handles lines such as #include and #define before the main compiler frontend analyzes the C language itself."],
+        ["Role in compilation", "It substitutes macros, chooses #if branches, and pulls in declarations from headers so the compiler sees the complete text for this translation unit."],
+        ["How it affects running code", "Preprocessing does not run at program runtime, but it decides which declarations, constants, and macro-expanded expressions the compiler later turns into executable behavior."]
+      ]
+    },
+    llvm: {
+      title: "LLVM IR",
+      kicker: "A typed intermediate representation used for analysis and optimization.",
+      sections: [
+        ["What it is", "LLVM IR is lower than C but higher than a specific CPU instruction set. It has explicit operations, branches, loads, stores, and typed values."],
+        ["Role in compilation", "Clang lowers C into IR so LLVM passes can optimize control flow, remove dead work, inline functions, and reason about memory before choosing final target instructions."],
+        ["How it affects running code", "IR values often become registers, stack slots, constants, or folded-away computations. The final CPU never executes LLVM IR here; it executes target machine code selected from it."]
+      ]
+    },
+    assembly: {
+      title: "Assembly",
+      kicker: "Human-readable target instructions before they are encoded as object bytes.",
+      sections: [
+        ["What it is", "Assembly names instructions, registers, labels, and addressing modes for the current CPU architecture."],
+        ["Role in compilation", "The backend selects target instructions and emits assembly text so you can inspect the shape of the generated code before it is assembled."],
+        ["How it affects running code", "Each assembly instruction corresponds to one or more encoded instruction bytes in the object file. Those bytes are what the CPU frontend eventually fetches and decodes."]
+      ]
+    },
+    object: {
+      title: "Object File",
+      kicker: "Relocatable machine code plus symbols and relocation records.",
+      sections: [
+        ["What it is", "An object file contains encoded instructions and data, but it is not usually a complete program yet. It may still refer to symbols defined somewhere else."],
+        ["Role in compilation", "The assembler packages machine-code bytes, sections, debug data, symbol tables, and relocation entries into a .o-style artifact."],
+        ["How it affects running code", "Object-code offsets are not final virtual addresses. The linker and loader still need to place sections and fix references before execution starts."]
+      ]
+    },
+    link: {
+      title: "Link",
+      kicker: "Object files and libraries combined into an executable image.",
+      sections: [
+        ["What it is", "Linking resolves references between object files and libraries, lays out sections, and emits an executable format such as Mach-O or ELF."],
+        ["Role in compilation", "The linker decides where code and data sections live relative to one another and records any dynamic-library work the OS loader must finish later."],
+        ["How it affects running code", "When you launch the program, the OS loader maps the executable into a process, maps needed libraries, prepares the stack and entry point, then transfers control into the code."]
+      ]
+    },
+    disassemble: {
+      title: "Machine / Binary",
+      kicker: "Executable instruction bytes viewed as decoded CPU instructions.",
+      sections: [
+        ["What it is", "The binary contains bytes that encode instructions and data. A disassembler reads those bytes and prints the instruction names, operands, and offsets they represent."],
+        ["How it starts running", "The OS does not stream the whole file straight into the CPU. It maps executable pages into the process's virtual address space, and the CPU's instruction pointer points at the next instruction address."],
+        ["Inside the CPU", "The CPU fetches instruction bytes through memory and cache, decodes opcodes into internal control signals or micro-ops, reads operands from registers or memory, executes them, and retires results in program order."],
+        ["Where results go next", "Results land in architectural registers, flags, vector registers, or memory addresses. Later instructions know where to read because their operands name those registers or addresses; modern CPUs also use register renaming, forwarding, and dependency tracking so nearby instructions can use fresh results without waiting for every slower layer."],
+        ["About pins and buffers", "External CPU pins carry power, clocks, interrupts, and bus signals; individual program instructions are not sent as separate pin activations. Inside the chip, transistor networks, queues, caches, execution units, and reorder buffers carry the work between fetch, decode, execute, and commit."]
+      ]
+    },
+    symbols: {
+      title: "Symbols",
+      kicker: "Names and addresses that help connect source-level ideas to binary sections.",
+      sections: [
+        ["What it is", "Symbols record names for functions, globals, sections, or debug entries that tools can use to label raw addresses and offsets."],
+        ["Role in compilation", "The assembler and linker use symbols to resolve references. Debuggers, profilers, and disassemblers use them to make binary output readable."],
+        ["How it affects running code", "The CPU does not need symbol names to execute instructions, but tooling uses them to explain which function or object a runtime address belongs to."]
+      ]
+    }
+  },
+  python: {
+    source: {
+      title: "Python Source",
+      kicker: "Human-readable Python code before CPython parses it.",
+      sections: [
+        ["What it is", "This is the .py text: imports, functions, classes, statements, expressions, and names."],
+        ["Role in compilation", "CPython parses the text into an AST, validates syntax, and compiles it into code objects containing bytecode for the Python virtual machine."],
+        ["How it affects running code", "The source guides the interpreter's bytecode and name lookups. The CPU runs the CPython interpreter binary, while that interpreter dispatches your Python bytecode."]
+      ]
+    },
+    project: {
+      title: "Project Context",
+      kicker: "The nearest Python project root and runtime context.",
+      sections: [
+        ["What it is", "The viewer looks for a nearby pyproject.toml or uv.lock so analysis can run from the same project shape as the selected file."],
+        ["Role in compilation", "Project context decides import paths, dependency information, and whether uv can provide the Python runner for inspection."],
+        ["How it affects running code", "Python execution depends heavily on sys.path, installed packages, and the active environment. The same file can behave differently in a different project context."]
+      ]
+    },
+    ast: {
+      title: "AST",
+      kicker: "A tree representation of Python syntax.",
+      sections: [
+        ["What it is", "The abstract syntax tree represents statements and expressions as structured nodes instead of raw text."],
+        ["Role in compilation", "CPython builds the AST first, then compiles that structure into code objects and bytecode."],
+        ["How it affects running code", "The AST itself is not executed by the CPU. It determines the bytecode operations that the interpreter will dispatch later."]
+      ]
+    },
+    compile: {
+      title: "Code Object",
+      kicker: "Compiled Python metadata and bytecode containers.",
+      sections: [
+        ["What it is", "A code object stores bytecode, constants, names, variable slots, line information, and flags for a module, function, or nested scope."],
+        ["Role in compilation", "The compile step turns AST nodes into code objects. Function definitions create nested code objects that are wrapped in function objects at runtime."],
+        ["How it affects running code", "When Python calls a function, CPython creates a frame for its code object and interprets that object's bytecode instructions."]
+      ]
+    },
+    bytecode: {
+      title: "Bytecode",
+      kicker: "Instructions for the CPython virtual machine rather than native machine code.",
+      sections: [
+        ["What it is", "Python bytecode is a compact instruction stream with operations such as loading constants, calling functions, branching, and returning values."],
+        ["Role in compilation", "CPython emits bytecode from code objects so the interpreter can execute a stable VM-level instruction set."],
+        ["How it affects running code", "The CPU executes the CPython interpreter's native machine code. That interpreter fetches bytecode instructions, performs the requested operation in C, updates Python frames and objects, then advances to the next bytecode."]
+      ]
+    },
+    imports: {
+      title: "Imports",
+      kicker: "Module dependencies discovered from source syntax.",
+      sections: [
+        ["What it is", "Imports name other modules or packages that this file expects to load."],
+        ["Role in compilation", "The analyzer extracts imports from the AST without importing the module, so it can show dependency intent without running import-time code."],
+        ["How it affects running code", "At runtime, Python resolves imports through sys.path, caches modules in sys.modules, and executes module top-level code the first time a module is loaded."]
+      ]
+    },
+    dependencies: {
+      title: "Dependencies",
+      kicker: "Installed package context when uv project metadata is available.",
+      sections: [
+        ["What it is", "The dependency view summarizes nearby package relationships rather than machine instructions."],
+        ["Role in compilation", "Dependencies do not change Python bytecode directly unless imported code or environment-specific modules change what the program references."],
+        ["How it affects running code", "Runtime behavior can hinge on package versions, native extensions, and import resolution. Native extensions eventually run machine code inside the Python process."]
+      ]
+    }
+  }
+};
 
 function renderAccessLinks(health = {}) {
   const container = $("#accessLinks");
@@ -167,82 +323,8 @@ function renderAccessLinks(health = {}) {
   container.textContent = health.warning || "Local-only viewer";
 }
 
-function activeTarget() {
-  return state.targets.find((target) => target.id === state.activeTargetId) || state.targets[0];
-}
-
 function targetLabel() {
-  const target = activeTarget();
-  return target.kind === "local" ? "Local" : target.name;
-}
-
-function normalizeUrlForClient(value) {
-  const raw = value.trim();
-  const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
-  url.pathname = "";
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
-function targetIdFromUrl(baseUrl) {
-  return `agent:${baseUrl}`;
-}
-
-function targetNameFromUrl(baseUrl) {
-  try {
-    const url = new URL(baseUrl);
-    return url.hostname.replace(/^\[/, "").replace(/\]$/, "");
-  } catch {
-    return baseUrl;
-  }
-}
-
-function loadSavedTargets() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(savedTargetsKey) || "[]");
-    for (const target of saved) {
-      if (!target?.baseUrl) continue;
-      upsertTarget({
-        id: targetIdFromUrl(target.baseUrl),
-        name: target.name || targetNameFromUrl(target.baseUrl),
-        baseUrl: target.baseUrl,
-        kind: "agent"
-      });
-    }
-  } catch {
-    localStorage.removeItem(savedTargetsKey);
-  }
-}
-
-function saveTargets() {
-  const remoteTargets = state.targets
-    .filter((target) => target.kind !== "local")
-    .map(({ name, baseUrl }) => ({ name, baseUrl }));
-  localStorage.setItem(savedTargetsKey, JSON.stringify(remoteTargets));
-}
-
-function upsertTarget(target) {
-  const existing = state.targets.findIndex((item) => item.id === target.id);
-  if (existing >= 0) {
-    state.targets[existing] = { ...state.targets[existing], ...target };
-  } else {
-    state.targets.push(target);
-  }
-  return state.targets.find((item) => item.id === target.id);
-}
-
-function renderTargets() {
-  const select = $("#targetSelect");
-  select.innerHTML = "";
-  for (const target of state.targets) {
-    const option = document.createElement("option");
-    option.value = target.id;
-    option.textContent = target.kind === "local" ? "Local" : target.name;
-    select.append(option);
-  }
-  select.value = state.activeTargetId;
-  $("#targetUrl").value = activeTarget().baseUrl || "";
+  return "Local";
 }
 
 async function requestJson(path, { method = "POST", body = {} } = {}) {
@@ -323,21 +405,8 @@ async function submitLogin(event) {
 }
 
 async function api(path, body = {}, options = {}) {
-  const target = activeTarget();
   const method = options.method || "POST";
-  if (options.local || target.kind === "local") {
-    return requestJson(path, { method, body });
-  }
-
-  return requestJson("/api/agent/proxy", {
-    method: "POST",
-    body: {
-      baseUrl: target.baseUrl,
-      apiPath: path,
-      method,
-      payload: body
-    }
-  });
+  return requestJson(path, { method, body });
 }
 
 function formatBytes(bytes) {
@@ -345,75 +414,6 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-async function discoverTargets() {
-  setStatus("Looking for Tailnet peers...");
-  const result = await api("/api/tailscale/status", {}, { local: true });
-  if (!result.available) {
-    setStatus(result.message || "Tailscale discovery is not available here");
-    return;
-  }
-
-  for (const peer of result.peers || []) {
-    if (!peer.baseUrl) continue;
-    upsertTarget({
-      id: targetIdFromUrl(peer.baseUrl),
-      name: `${peer.name}${peer.online ? "" : " offline"}`,
-      baseUrl: peer.baseUrl,
-      kind: "agent",
-      online: peer.online,
-      os: peer.os
-    });
-  }
-  saveTargets();
-  renderTargets();
-  setStatus(result.message || "Tailnet peers discovered");
-}
-
-async function connectTarget() {
-  const manualUrl = $("#targetUrl").value.trim();
-  if (manualUrl) {
-    const baseUrl = normalizeUrlForClient(manualUrl);
-    const target = upsertTarget({
-      id: targetIdFromUrl(baseUrl),
-      name: targetNameFromUrl(baseUrl),
-      baseUrl,
-      kind: "agent"
-    });
-    state.activeTargetId = target.id;
-    saveTargets();
-    renderTargets();
-  }
-
-  setStatus(`Connecting to ${targetLabel()}...`);
-  const health = await api("/api/health", {}, { method: "GET" });
-  if (!health.ok) {
-    throw new Error(health.error || "Target did not return a healthy probe response.");
-  }
-
-  state.root = health.root;
-  $("#folderPath").value = health.root;
-  $("#pidInput").value = health.pid;
-  resetSavePath();
-  state.currentFileName = "snippet.c";
-  state.currentFilePath = "";
-  state.currentLanguage = "c";
-  $("#currentFileName").textContent = "snippet.c";
-  state.compileResult = null;
-  state.saveResult = null;
-  state.processResult = null;
-  updateFunctionSelect([]);
-  updateArtifactTabLabels();
-  renderStages([]);
-  renderSaveLayers([]);
-  renderArtifact();
-  renderSaveOutput();
-  renderProcessOutput();
-  renderTargets();
-  renderAccessLinks(health);
-  setStatus(`${targetLabel()} · ${health.platform}/${health.arch} · PID ${health.pid}`);
-  await scanFiles();
 }
 
 function renderFiles(files = []) {
@@ -588,6 +588,111 @@ async function compile() {
   setStatus(result.ok ? `${targetLabel()} · compile artifacts ready` : `${targetLabel()} · compiler stopped`);
 }
 
+function pipelineLanguage() {
+  return state.currentLanguage === "python" || state.compileResult?.language === "python" ? "python" : "c";
+}
+
+function getPipelineModel(language = pipelineLanguage()) {
+  return pipelineModels[language] || pipelineModels.c;
+}
+
+function normalizeStageInfoKey(stageId = "") {
+  const normalized = String(stageId);
+  if (normalized === "disassemble-otool") return "disassemble";
+  return normalized;
+}
+
+function stageInfoFor(stageKey, language = pipelineLanguage()) {
+  const key = normalizeStageInfoKey(stageKey);
+  return stageCatalog[language]?.[key] || stageCatalog.c[key] || {
+    title: key || "Stage",
+    kicker: "Toolchain stage",
+    sections: [
+      ["What it is", "This stage is part of the local inspection pipeline."],
+      ["Role in compilation", "The viewer records the command output so you can inspect where the pipeline succeeded or stopped."],
+      ["How it affects running code", "Successful stages produce artifacts used by later tooling or by the runtime loader."]
+    ]
+  };
+}
+
+function currentStageFor(stageKey) {
+  const key = normalizeStageInfoKey(stageKey);
+  return (state.compileResult?.stages || []).find((stage) => normalizeStageInfoKey(stage.id) === key);
+}
+
+function stageColorFor(stageKey) {
+  const key = normalizeStageInfoKey(stageKey);
+  return getPipelineModel().find((stage) => stage.key === key)?.color || "#14746f";
+}
+
+function openStageDialog(stageKey) {
+  const dialog = $("#stageDialog");
+  const info = stageInfoFor(stageKey);
+  const stage = currentStageFor(stageKey);
+  const normalizedKey = normalizeStageInfoKey(stageKey);
+  $("#stageDialogTitle").textContent = info.title;
+  $("#stageDialogKicker").textContent = info.kicker;
+  $("#stageDialogStatus").style.borderLeftColor = stageColorFor(normalizedKey);
+
+  const statusLines = [];
+  if (normalizedKey === "source") {
+    statusLines.push(escapeHtml(`Current editor buffer: ${state.currentFileName || "snippet.c"}`));
+    if (state.currentFilePath) statusLines.push(escapeHtml(state.currentFilePath));
+  } else if (stage) {
+    statusLines.push(escapeHtml(`${stage.ok ? "Completed" : "Stopped"} in ${stage.durationMs} ms`));
+    if (stage.command) statusLines.push(`<code>${escapeHtml(stage.command)}</code>`);
+    if (stage.stderr) statusLines.push(escapeHtml(stage.stderr.slice(0, 240)));
+  } else {
+    statusLines.push("Run a compile to see the concrete command and timing for this stage.");
+  }
+  $("#stageDialogStatus").innerHTML = statusLines.map((line) => `<span>${line}</span>`).join("");
+
+  $("#stageDialogContent").innerHTML = info.sections
+    .map(([heading, body]) => `
+      <section class="stage-dialog-section">
+        <h3>${escapeHtml(heading)}</h3>
+        <p>${escapeHtml(body)}</p>
+      </section>
+    `)
+    .join("");
+
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+    return;
+  }
+  dialog.setAttribute("open", "");
+}
+
+function closeStageDialog() {
+  const dialog = $("#stageDialog");
+  if (typeof dialog.close === "function" && dialog.open) {
+    dialog.close();
+    return;
+  }
+  dialog.removeAttribute("open");
+}
+
+function pipelineRegionAtEvent(event) {
+  const rect = $("#pipelineCanvas").getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  return state.pipelineHitRegions.find((region) =>
+    x >= region.x &&
+    x <= region.x + region.width &&
+    y >= region.y &&
+    y <= region.y + region.height
+  );
+}
+
+function handlePipelineClick(event) {
+  const region = pipelineRegionAtEvent(event);
+  if (region) openStageDialog(region.key);
+}
+
+function updatePipelineCursor(event) {
+  $("#pipelineCanvas").style.cursor = pipelineRegionAtEvent(event) ? "pointer" : "default";
+}
+
 function renderStages(stages) {
   const list = $("#stageList");
   list.innerHTML = "";
@@ -597,14 +702,18 @@ function renderStages(stages) {
   }
 
   for (const stage of stages) {
-    const item = document.createElement("div");
-    item.className = "stage-item";
+    const item = document.createElement("button");
+    const key = normalizeStageInfoKey(stage.id);
+    item.className = "stage-item stage-action";
+    item.type = "button";
+    item.style.setProperty("--stage-color", stageColorFor(key));
     const status = stage.ok ? "ok" : "bad";
     item.innerHTML = `
-      <strong class="${status}">${stage.label}</strong>
+      <strong class="${status}">${escapeHtml(stage.label)}</strong>
       <span class="stage-meta">${stage.ok ? "completed" : "stopped"} · ${stage.durationMs} ms</span>
       ${stage.stderr ? `<span class="stage-meta">${escapeHtml(stage.stderr.slice(0, 180))}</span>` : ""}
     `;
+    item.addEventListener("click", () => openStageDialog(key));
     list.append(item);
   }
 }
@@ -618,42 +727,39 @@ function drawPipeline(stages) {
   const ctx = canvas.getContext("2d");
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, rect.width, rect.height);
+  state.pipelineHitRegions = [];
 
-  const isPython = state.currentLanguage === "python" || state.compileResult?.language === "python";
-  const labels = isPython
-    ? ["Source", "Project", "AST", "Code Obj", "Bytecode", "Imports", "Deps"]
-    : ["Source", "Preprocess", "LLVM IR", "Assembly", "Object", "Link", "Machine"];
-  const stageKeys = isPython
-    ? ["source", "project", "ast", "compile", "bytecode", "imports", "dependencies"]
-    : ["source", "preprocess", "llvm", "assembly", "object", "link", "disassemble"];
-  const colors = ["#17211f", "#14746f", "#8cae33", "#c44e2e", "#48506b", "#0c5652", "#111716"];
+  const language = pipelineLanguage();
+  const model = getPipelineModel(language);
   const margin = 22;
-  const width = Math.max(96, (rect.width - margin * 2) / labels.length - 10);
-  const y = 74;
-  const stageMap = new Map((stages || []).map((stage) => [stage.id, stage]));
+  const gap = 10;
+  const cardHeight = 56;
+  const width = Math.max(96, (rect.width - margin * 2 - gap * (model.length - 1)) / model.length);
+  const y = rect.height >= 200 ? 74 : 50;
+  const stageMap = new Map((stages || []).map((stage) => [normalizeStageInfoKey(stage.id), stage]));
 
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#cfd8d2";
-  for (let index = 0; index < labels.length - 1; index += 1) {
-    const x1 = margin + index * (width + 10) + width;
-    const x2 = margin + (index + 1) * (width + 10);
+  for (let index = 0; index < model.length - 1; index += 1) {
+    const x1 = margin + index * (width + gap) + width;
+    const x2 = margin + (index + 1) * (width + gap);
     ctx.beginPath();
-    ctx.moveTo(x1, y + 28);
-    ctx.lineTo(x2, y + 28);
+    ctx.moveTo(x1, y + cardHeight / 2);
+    ctx.lineTo(x2, y + cardHeight / 2);
     ctx.stroke();
   }
 
-  labels.forEach((label, index) => {
-    const x = margin + index * (width + 10);
-    const key = stageKeys[index];
-    const stage = stageMap.get(key);
-    ctx.fillStyle = colors[index];
+  model.forEach((step, index) => {
+    const x = margin + index * (width + gap);
+    const stage = stageMap.get(step.key);
+    state.pipelineHitRegions.push({ key: step.key, x, y, width, height: cardHeight });
+    ctx.fillStyle = step.color;
     ctx.beginPath();
-    roundRect(ctx, x, y, width, 56, 8);
+    roundRect(ctx, x, y, width, cardHeight, 8);
     ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.font = "700 12px system-ui";
-    ctx.fillText(label, x + 10, y + 23);
+    ctx.fillText(step.label, x + 10, y + 23);
     ctx.font = "11px system-ui";
     const status = index === 0 ? "editor" : stage ? (stage.ok ? `${stage.durationMs} ms` : "stopped") : "pending";
     ctx.fillText(status, x + 10, y + 41);
@@ -662,11 +768,11 @@ function drawPipeline(stages) {
   ctx.fillStyle = "#66706d";
   ctx.font = "12px system-ui";
   ctx.fillText(
-    isPython
+    language === "python"
       ? "Python artifacts are CPython bytecode and interpreter-level operations, with uv project context when available."
       : "Real local artifacts. Runtime addresses are assigned later by the loader.",
     margin,
-    168
+    rect.height >= 200 ? 168 : 136
   );
 }
 
@@ -920,12 +1026,14 @@ function escapeHtml(value) {
 
 function wireEvents() {
   $("#loginForm").addEventListener("submit", (event) => submitLogin(event).catch(showLoginError));
-  $("#discoverTargets").addEventListener("click", () => discoverTargets().catch(showError));
-  $("#connectTarget").addEventListener("click", () => connectTarget().catch(showError));
-  $("#targetSelect").addEventListener("change", () => {
-    state.activeTargetId = $("#targetSelect").value;
-    renderTargets();
-    connectTarget().catch(showError);
+  $("#pipelineCanvas").addEventListener("click", handlePipelineClick);
+  $("#pipelineCanvas").addEventListener("mousemove", updatePipelineCursor);
+  $("#pipelineCanvas").addEventListener("mouseleave", () => {
+    $("#pipelineCanvas").style.cursor = "default";
+  });
+  $("#closeStageDialog").addEventListener("click", closeStageDialog);
+  $("#stageDialog").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeStageDialog();
   });
 
   $("#browseFolder").addEventListener("click", () => openFolderBrowser().catch(showError));
@@ -1009,8 +1117,6 @@ async function startViewer() {
   appStarting = true;
   showViewerShell();
   try {
-    loadSavedTargets();
-    renderTargets();
     $("#sourceEditor").value = compileSample;
     $("#saveEditor").value = saveSample;
     renderStages([]);

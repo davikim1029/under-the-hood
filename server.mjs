@@ -38,15 +38,6 @@ const authCookieName = "uth_session";
 const authSessionMaxAgeSeconds = 7 * 24 * 60 * 60;
 const authSessions = new Map();
 const authConfig = readAuthConfig();
-const allowedAgentPaths = new Set([
-  "/api/health",
-  "/api/browse-folders",
-  "/api/list-files",
-  "/api/read-file",
-  "/api/compile",
-  "/api/save-trace",
-  "/api/process"
-]);
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -850,132 +841,6 @@ function isTailscaleHost(hostname) {
     return true;
   }
   return host.startsWith("fd7a:115c:a1e0:") || host.endsWith(".ts.net");
-}
-
-function normalizeAgentBaseUrl(value) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error("Remote target URL is required.");
-  }
-
-  const url = new URL(value.trim());
-  if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error("Remote target must use http or https.");
-  }
-
-  if (!isLoopbackHost(url.hostname) && !isTailscaleHost(url.hostname)) {
-    throw new Error("Remote target must be localhost, a Tailscale 100.64.0.0/10 IP, Tailscale IPv6, or a .ts.net MagicDNS name.");
-  }
-
-  url.pathname = "";
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
-function defaultAgentUrlForHost(host, port = basePort) {
-  const normalized = String(host || "").replace(/\.$/, "");
-  if (!normalized) return "";
-  const wrapped = normalized.includes(":") && !normalized.startsWith("[") ? `[${normalized}]` : normalized;
-  return `http://${wrapped}:${port}`;
-}
-
-async function discoverTailscale() {
-  const tailscalePath = await findTailscaleCli();
-  if (!tailscalePath) {
-    return {
-      ok: true,
-      available: false,
-      peers: [],
-      message: "The tailscale CLI is not installed on this machine."
-    };
-  }
-
-  const result = await runCommand(tailscalePath, ["status", "--json"], { timeoutMs: 5_000 });
-  if (!result.ok) {
-    return {
-      ok: true,
-      available: false,
-      peers: [],
-      message: truncateText(result.stderr || result.stdout || "tailscale status did not return peer data.", 12_000)
-    };
-  }
-
-  const status = JSON.parse(result.stdout);
-  const self = formatTailscaleNode(status.Self, "self");
-  const peers = Object.entries(status.Peer || {})
-    .map(([id, peer]) => formatTailscaleNode(peer, id))
-    .filter(Boolean)
-    .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
-
-  return {
-    ok: true,
-    available: true,
-    self,
-    peers,
-    message: `${peers.length} Tailnet peer${peers.length === 1 ? "" : "s"} discovered.`
-  };
-}
-
-function formatTailscaleNode(node, id) {
-  if (!node) return null;
-  const dnsName = String(node.DNSName || "").replace(/\.$/, "");
-  const addresses = Array.isArray(node.TailscaleIPs) ? node.TailscaleIPs : [];
-  const host = dnsName || addresses[0] || node.HostName || "";
-  return {
-    id,
-    name: node.HostName || dnsName || id,
-    dnsName,
-    addresses,
-    os: node.OS || "",
-    online: Boolean(node.Online),
-    exitNode: Boolean(node.ExitNode),
-    baseUrl: defaultAgentUrlForHost(host)
-  };
-}
-
-async function proxyAgentRequest(body) {
-  const apiPath = typeof body.apiPath === "string" ? body.apiPath : "";
-  if (!allowedAgentPaths.has(apiPath)) {
-    throw new Error("That remote API path is not available through the target proxy.");
-  }
-
-  const method = body.method === "GET" ? "GET" : "POST";
-  if (method === "GET" && apiPath !== "/api/health") {
-    throw new Error("Only health checks can be proxied with GET.");
-  }
-
-  const baseUrl = normalizeAgentBaseUrl(body.baseUrl);
-  const targetUrl = `${baseUrl}${apiPath}`;
-  const response = await fetch(targetUrl, {
-    method,
-    headers: method === "POST" ? { "content-type": "application/json" } : undefined,
-    body: method === "POST" ? JSON.stringify(body.payload || {}) : undefined,
-    signal: AbortSignal.timeout(30_000)
-  });
-  const raw = await response.text();
-  let payload;
-  try {
-    payload = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new Error(`Remote target returned non-JSON output from ${apiPath}.`);
-  }
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      remoteStatus: response.status,
-      error: payload.error || `Remote target returned HTTP ${response.status}.`,
-      payload
-    };
-  }
-
-  return {
-    ...payload,
-    remote: {
-      baseUrl,
-      apiPath
-    }
-  };
 }
 
 async function listFiles(rootPath) {
@@ -2178,16 +2043,6 @@ async function routeApi(req, res) {
     }
 
     const body = await readRequestBody(req);
-    if (url.pathname === "/api/tailscale/status") {
-      json(res, 200, await discoverTailscale());
-      return;
-    }
-
-    if (url.pathname === "/api/agent/proxy") {
-      json(res, 200, await proxyAgentRequest(body));
-      return;
-    }
-
     if (url.pathname === "/api/browse-folders") {
       json(res, 200, { ok: true, ...(await browseFolders(body.path || body.root)) });
       return;
@@ -2280,7 +2135,7 @@ function listen(port, attempts = 0) {
       console.log(`Funnel source: ${urls.funnelSource}`);
     }
     if (bindHost !== "127.0.0.1" || explicitPublicUrl || urls.funnel) {
-      console.log(`Agent bind: ${bindHost}`);
+      console.log(`Network bind: ${bindHost}`);
       console.log(`Advertise URL: ${urls.advertised || displayUrl}`);
     }
   });
