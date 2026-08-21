@@ -84,6 +84,15 @@ const state = {
   }
 };
 
+const authState = {
+  enabled: false,
+  authenticated: false,
+  requiresUsername: false,
+  requiresPassword: false
+};
+let appStarted = false;
+let appStarting = false;
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const savedTargetsKey = "under-the-hood.targets";
@@ -239,6 +248,7 @@ function renderTargets() {
 async function requestJson(path, { method = "POST", body = {} } = {}) {
   const response = await fetch(path, {
     method,
+    credentials: "same-origin",
     headers: method === "POST" ? { "content-type": "application/json" } : undefined,
     body: method === "POST" ? JSON.stringify(body) : undefined
   });
@@ -247,6 +257,69 @@ async function requestJson(path, { method = "POST", body = {} } = {}) {
     throw new Error(payload.error || payload.error?.message || payload.stderr || "Request failed.");
   }
   return payload;
+}
+
+function applyAuthStatus(status = {}) {
+  authState.enabled = Boolean(status.enabled);
+  authState.authenticated = Boolean(status.authenticated);
+  authState.requiresUsername = Boolean(status.requiresUsername);
+  authState.requiresPassword = Boolean(status.requiresPassword);
+
+  const usernameField = $("#loginUsernameField");
+  const usernameInput = $("#loginUsername");
+  const passwordField = $("#loginPasswordField");
+  const passwordInput = $("#loginPassword");
+
+  usernameField.hidden = !authState.requiresUsername;
+  usernameInput.disabled = !authState.requiresUsername;
+  usernameInput.required = authState.requiresUsername;
+  passwordField.hidden = !authState.requiresPassword;
+  passwordInput.disabled = !authState.requiresPassword;
+  passwordInput.required = authState.requiresPassword;
+}
+
+function setLoginMessage(message = "") {
+  $("#loginMessage").textContent = message;
+}
+
+function showLoginGate() {
+  document.body.classList.remove("auth-pending", "auth-ready");
+  document.body.classList.add("auth-required");
+  setLoginMessage("");
+  const focusTarget = authState.requiresUsername ? $("#loginUsername") : $("#loginPassword");
+  window.requestAnimationFrame(() => focusTarget?.focus());
+}
+
+function showViewerShell() {
+  document.body.classList.remove("auth-pending", "auth-required");
+  document.body.classList.add("auth-ready");
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  setLoginMessage("");
+  const button = $("#loginButton");
+  button.disabled = true;
+  try {
+    const status = await requestJson("/api/auth/login", {
+      body: {
+        username: $("#loginUsername").value,
+        password: $("#loginPassword").value
+      }
+    });
+    applyAuthStatus(status);
+    await startViewer();
+  } catch (error) {
+    if (authState.authenticated) {
+      showViewerShell();
+      showError(error);
+    } else {
+      setLoginMessage(error.message || "Sign in failed.");
+      $("#loginPassword").value = "";
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function api(path, body = {}, options = {}) {
@@ -846,6 +919,7 @@ function escapeHtml(value) {
 }
 
 function wireEvents() {
+  $("#loginForm").addEventListener("submit", (event) => submitLogin(event).catch(showLoginError));
   $("#discoverTargets").addEventListener("click", () => discoverTargets().catch(showError));
   $("#connectTarget").addEventListener("click", () => connectTarget().catch(showError));
   $("#targetSelect").addEventListener("change", () => {
@@ -925,21 +999,28 @@ function showError(error) {
   setStatus(error.message);
 }
 
-async function boot() {
-  wireEvents();
-  loadSavedTargets();
-  renderTargets();
-  $("#sourceEditor").value = compileSample;
-  $("#saveEditor").value = saveSample;
-  renderStages([]);
-  renderSaveLayers([]);
-  renderArtifact();
-  renderSaveOutput();
-  renderProcessOutput();
-  updateArtifactTabLabels();
-  drawPipeline([]);
+function showLoginError(error) {
+  console.error(error);
+  setLoginMessage(error.message || "Sign in failed.");
+}
 
+async function startViewer() {
+  if (appStarted || appStarting) return;
+  appStarting = true;
+  showViewerShell();
   try {
+    loadSavedTargets();
+    renderTargets();
+    $("#sourceEditor").value = compileSample;
+    $("#saveEditor").value = saveSample;
+    renderStages([]);
+    renderSaveLayers([]);
+    renderArtifact();
+    renderSaveOutput();
+    renderProcessOutput();
+    updateArtifactTabLabels();
+    drawPipeline([]);
+
     const health = await requestJson("/api/health", { method: "GET" });
     state.root = health.root;
     $("#folderPath").value = health.root;
@@ -948,7 +1029,24 @@ async function boot() {
     renderAccessLinks(health);
     setStatus(`Local · ${health.platform}/${health.arch} · PID ${health.pid}`);
     await scanFiles();
+    appStarted = true;
+  } finally {
+    appStarting = false;
+  }
+}
+
+async function boot() {
+  wireEvents();
+  try {
+    const status = await requestJson("/api/auth/status", { method: "GET" });
+    applyAuthStatus(status);
+    if (authState.enabled && !authState.authenticated) {
+      showLoginGate();
+      return;
+    }
+    await startViewer();
   } catch (error) {
+    document.body.classList.remove("auth-pending");
     showError(error);
   }
 }

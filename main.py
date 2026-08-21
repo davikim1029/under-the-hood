@@ -28,6 +28,31 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def load_local_env() -> None:
+    env_path = ROOT / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key) or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+load_local_env()
+
 LOG_DIR = ROOT / "logs"
 PID_FILE = LOG_DIR / "under_the_hood.pid"
 LOG_FILE = LOG_DIR / "under_the_hood.log"

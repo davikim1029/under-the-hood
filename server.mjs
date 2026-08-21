@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import {
   access,
   constants,
@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
+
+const localEnv = loadLocalEnv();
+
 const defaultRoot = process.cwd();
 const basePort = Number.parseInt(process.env.PORT || "5173", 10);
 const localNetwork = inspectLocalNetwork();
@@ -31,6 +34,10 @@ const trustWindowsInteropFunnel = /^(1|true|yes)$/i.test(process.env.UTH_TRUST_W
 const maxBodyBytes = 3 * 1024 * 1024;
 const maxOutputBytes = 2 * 1024 * 1024;
 const textLimit = 220_000;
+const authCookieName = "uth_session";
+const authSessionMaxAgeSeconds = 7 * 24 * 60 * 60;
+const authSessions = new Map();
+const authConfig = readAuthConfig();
 const allowedAgentPaths = new Set([
   "/api/health",
   "/api/browse-folders",
@@ -80,11 +87,67 @@ const cKeywords = new Set([
   "struct"
 ]);
 
-function json(res, statusCode, value) {
+function loadLocalEnv() {
+  const envPath = path.join(__dirname, ".env");
+  let raw = "";
+  const loaded = {};
+  try {
+    raw = readFileSync(envPath, "utf8");
+  } catch {
+    return loaded;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    let value = rawValue.trim();
+    const quote = value[0];
+    if ((quote === '"' || quote === "'") && value.endsWith(quote)) {
+      value = value.slice(1, -1);
+    }
+    loaded[key] = value;
+    if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+      process.env[key] = value;
+    }
+  }
+  return loaded;
+}
+
+function authEnvValue(localKeys, processKeys = []) {
+  for (const key of localKeys) {
+    if (Object.prototype.hasOwnProperty.call(localEnv, key) && localEnv[key] !== "") {
+      return localEnv[key];
+    }
+  }
+  for (const key of processKeys) {
+    if (Object.prototype.hasOwnProperty.call(process.env, key) && process.env[key] !== "") {
+      return process.env[key];
+    }
+  }
+  return "";
+}
+
+function readAuthConfig() {
+  const username = authEnvValue(["USERNAME", "UTH_USERNAME"], ["UTH_USERNAME"]);
+  const password = authEnvValue(["PASSWORD", "PASSword", "UTH_PASSWORD"], ["UTH_PASSWORD"]);
+  return {
+    enabled: Boolean(username || password),
+    requiresUsername: Boolean(username),
+    requiresPassword: Boolean(password),
+    username,
+    password
+  };
+}
+
+function json(res, statusCode, value, headers = {}) {
   const payload = JSON.stringify(value, null, 2);
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
+    ...headers
   });
   res.end(payload);
 }
@@ -99,6 +162,111 @@ function text(res, statusCode, value, contentType = "text/plain; charset=utf-8")
 
 function notFound(res) {
   json(res, 404, { ok: false, error: "Not found" });
+}
+
+function parseCookies(header = "") {
+  const cookies = new Map();
+  for (const part of String(header).split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    try {
+      cookies.set(key, decodeURIComponent(value));
+    } catch {
+      cookies.set(key, value);
+    }
+  }
+  return cookies;
+}
+
+function hashToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function cleanupAuthSessions() {
+  const now = Date.now();
+  for (const [sessionHash, expiresAt] of authSessions) {
+    if (expiresAt <= now) authSessions.delete(sessionHash);
+  }
+}
+
+function isAuthenticated(req) {
+  if (!authConfig.enabled) return true;
+  cleanupAuthSessions();
+  const token = parseCookies(req.headers.cookie).get(authCookieName);
+  if (!token) return false;
+  const expiresAt = authSessions.get(hashToken(token));
+  return Boolean(expiresAt && expiresAt > Date.now());
+}
+
+function safeEqual(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual));
+  const expectedBuffer = Buffer.from(String(expected));
+  if (actualBuffer.length !== expectedBuffer.length) {
+    const length = Math.max(actualBuffer.length, expectedBuffer.length, 1);
+    const paddedActual = Buffer.alloc(length);
+    const paddedExpected = Buffer.alloc(length);
+    actualBuffer.copy(paddedActual);
+    expectedBuffer.copy(paddedExpected);
+    timingSafeEqual(paddedActual, paddedExpected);
+    return false;
+  }
+  return timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function authStatus(req) {
+  return {
+    ok: true,
+    enabled: authConfig.enabled,
+    authenticated: isAuthenticated(req),
+    requiresUsername: authConfig.requiresUsername,
+    requiresPassword: authConfig.requiresPassword
+  };
+}
+
+function authCookieHeader(token, expiresAt) {
+  const expires = new Date(expiresAt).toUTCString();
+  return [
+    `${authCookieName}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${authSessionMaxAgeSeconds}`,
+    `Expires=${expires}`
+  ].join("; ");
+}
+
+function createAuthSessionHeader() {
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = Date.now() + authSessionMaxAgeSeconds * 1000;
+  authSessions.set(hashToken(token), expiresAt);
+  return authCookieHeader(token, expiresAt);
+}
+
+async function handleAuthLogin(req, res) {
+  const body = await readRequestBody(req);
+  if (!authConfig.enabled) {
+    json(res, 200, authStatus(req));
+    return;
+  }
+
+  const usernameOk = !authConfig.requiresUsername || safeEqual(body.username || "", authConfig.username);
+  const passwordOk = !authConfig.requiresPassword || safeEqual(body.password || "", authConfig.password);
+  if (!usernameOk || !passwordOk) {
+    json(res, 401, {
+      ok: false,
+      authRequired: true,
+      error: "The credentials did not match."
+    });
+    return;
+  }
+
+  const cookie = createAuthSessionHeader();
+  json(res, 200, { ...authStatus(req), authenticated: true }, {
+    "set-cookie": cookie
+  });
 }
 
 function normalizeIncomingPath(value, fallback = defaultRoot) {
@@ -1984,8 +2152,27 @@ async function routeApi(req, res) {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/auth/status") {
+      json(res, 200, authStatus(req));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/login") {
+      await handleAuthLogin(req, res);
+      return;
+    }
+
     if (req.method !== "POST") {
       notFound(res);
+      return;
+    }
+
+    if (!isAuthenticated(req)) {
+      json(res, 401, {
+        ok: false,
+        authRequired: true,
+        error: "Sign in required."
+      });
       return;
     }
 

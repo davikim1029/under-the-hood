@@ -224,6 +224,72 @@ textarea {
   display: none;
 }
 
+body.auth-pending .topbar,
+body.auth-pending .app-shell,
+body.auth-required .topbar,
+body.auth-required .app-shell {
+  display: none;
+}
+
+.login-gate {
+  display: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+body.auth-required .login-gate {
+  display: grid;
+}
+
+.login-card {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 24rem);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.login-brand h2,
+.login-brand p,
+.login-message {
+  margin: 0;
+}
+
+.login-brand h2 {
+  font-size: 1.2rem;
+  line-height: 1.1;
+}
+
+.login-brand p {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.login-card input,
+.login-card button {
+  width: 100%;
+}
+
+.login-message {
+  min-height: 1.2rem;
+  color: var(--copper);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
 .controls-strip {
   display: flex;
   align-items: end;

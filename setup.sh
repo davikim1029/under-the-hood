@@ -6,6 +6,9 @@ ASSUME_YES=0
 CHECK_ONLY=0
 WITH_TAILSCALE=0
 WITH_UV=0
+WITH_WINDOWS_FUNNEL=0
+WINDOWS_FUNNEL_TARGET_PORT=""
+WINDOWS_FUNNEL_HTTPS_PORT="${UTH_FUNNEL_HTTPS_PORT:-443}"
 REQUIRED_MISSING=0
 
 usage() {
@@ -20,6 +23,15 @@ Options:
   --yes, -y          Run non-interactively where supported.
   --with-tailscale   Also install the Tailscale CLI/daemon if it is missing.
   --with-uv          Also install uv if it is missing.
+  --with-windows-funnel
+                     In WSL, configure the Windows Tailscale daemon to Funnel
+                     this viewer without overriding active ports.
+  --funnel-target-port PORT
+                     Windows localhost port for the viewer (default: PORT,
+                     .env PORT, or 5173).
+  --funnel-https-port PORT
+                     Public Funnel HTTPS port: 443, 8443, or 10000
+                     (default: UTH_FUNNEL_HTTPS_PORT or 443).
   --help, -h         Show this help.
 
 Required non-Python tools:
@@ -74,6 +86,89 @@ resolve_tailscale() {
     fi
   done
   return 1
+}
+
+env_file_value() {
+  local key="$1"
+  local env_file="$PROJECT_DIR/.env"
+  [[ -f "$env_file" ]] || return 1
+  sed -n -E "s/^${key}=//p" "$env_file" | tail -n 1
+}
+
+running_in_wsl() {
+  [[ "$(uname -s)" == "Linux" ]] || return 1
+  if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
+    return 0
+  fi
+  uname -r | grep -qiE '(microsoft|wsl)'
+}
+
+resolve_windows_tailscale() {
+  local candidate
+  for candidate in \
+    "/mnt/c/Program Files/Tailscale/tailscale.exe" \
+    "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_windows_curl() {
+  if command -v curl.exe >/dev/null 2>&1; then
+    command -v curl.exe
+    return 0
+  fi
+  local candidate="/mnt/c/Windows/System32/curl.exe"
+  [[ -x "$candidate" ]] && printf '%s\n' "$candidate"
+}
+
+resolve_powershell() {
+  if command -v powershell.exe >/dev/null 2>&1; then
+    command -v powershell.exe
+    return 0
+  fi
+  if command -v pwsh.exe >/dev/null 2>&1; then
+    command -v pwsh.exe
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" \
+    "/mnt/c/Program Files/PowerShell/7/pwsh.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+valid_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+}
+
+fail_setup() {
+  warn "$*"
+  REQUIRED_MISSING=1
+  return 1
+}
+
+set_local_env() {
+  local key="$1" value="$2" env_file="$PROJECT_DIR/.env" tmp_file
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    printf 'would write .env: %s=%s\n' "$key" "$value"
+    return 0
+  fi
+  tmp_file="$(mktemp)"
+  if [[ -f "$env_file" ]]; then
+    grep -v -E "^${key}=" "$env_file" >"$tmp_file" || true
+  fi
+  printf '%s=%s\n' "$key" "$value" >>"$tmp_file"
+  mv "$tmp_file" "$env_file"
 }
 
 ask_yes() {
@@ -396,6 +491,298 @@ install_uv_linux() {
   fi
 }
 
+windows_health_json() {
+  local port="$1" curl_path powershell_path
+  if curl_path="$(resolve_windows_curl)"; then
+    "$curl_path" -fsS --max-time 2 "http://127.0.0.1:${port}/api/health" 2>/dev/null
+    return $?
+  fi
+  if powershell_path="$(resolve_powershell)"; then
+    "$powershell_path" -NoProfile -NonInteractive -Command \
+      "try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri 'http://127.0.0.1:${port}/api/health').Content; exit 0 } catch { exit 1 }" \
+      2>/dev/null
+    return $?
+  fi
+  return 2
+}
+
+windows_viewer_health_matches() {
+  local port="$1" payload
+  payload="$(windows_health_json "$port")" || return 1
+  printf '%s' "$payload" | node -e '
+const expectedRoot = process.argv[1];
+let raw = "";
+process.stdin.on("data", (chunk) => { raw += chunk; });
+process.stdin.on("end", () => {
+  try {
+    const payload = JSON.parse(raw);
+    process.exit(payload && payload.ok === true && payload.root === expectedRoot ? 0 : 1);
+  } catch {
+    process.exit(1);
+  }
+});
+' "$PROJECT_DIR"
+}
+
+windows_port_listening() {
+  local port="$1" powershell_path
+  if powershell_path="$(resolve_powershell)"; then
+    "$powershell_path" -NoProfile -NonInteractive -Command \
+      "\$ErrorActionPreference='SilentlyContinue'; \$listeners = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${port} -State Listen; if (\$listeners) { exit 0 } else { exit 1 }" \
+      >/dev/null 2>&1
+    return $?
+  fi
+  if [[ -x /mnt/c/Windows/System32/netstat.exe && -x /mnt/c/Windows/System32/findstr.exe ]]; then
+    /mnt/c/Windows/System32/cmd.exe /c "netstat -ano -p tcp | findstr /R /C:\":${port} .*LISTENING\"" >/dev/null 2>&1
+    return $?
+  fi
+  return 2
+}
+
+ensure_windows_target_port_available() {
+  local port="$1" listen_status
+  if windows_viewer_health_matches "$port"; then
+    ok " Windows localhost:${port} reaches this viewer"
+    return 0
+  fi
+
+  windows_port_listening "$port"
+  listen_status=$?
+  if [[ "$listen_status" == "0" ]]; then
+    fail_setup "Windows localhost:${port} is already listening, but /api/health did not match this project. Refusing to expose that port with Funnel."
+    return 1
+  fi
+  if [[ "$listen_status" == "2" ]]; then
+    fail_setup "Could not inspect Windows localhost:${port}; refusing to configure Funnel because active-port safety could not be verified."
+    return 1
+  fi
+
+  warn "Windows localhost:${port} is not listening yet. Funnel can be configured now, but start this viewer on PORT=${port} before using the public URL."
+  return 0
+}
+
+inspect_tailscale_status_file() {
+  local file="$1" https_port="$2" target_port="$3"
+  node - "$file" "$https_port" "$target_port" <<'NODE'
+const fs = require("fs");
+const [file, publicPortRaw, targetPortRaw] = process.argv.slice(2);
+const publicPort = Number(publicPortRaw);
+const targetPort = Number(targetPortRaw);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {
+  console.log("empty");
+  process.exit(0);
+}
+
+function stripIpv6Brackets(hostname) {
+  return String(hostname || "").replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+}
+
+function parseHostPort(hostPort) {
+  try {
+    const url = new URL(`https://${hostPort}`);
+    return {
+      host: stripIpv6Brackets(url.hostname),
+      port: Number.parseInt(url.port || "443", 10)
+    };
+  } catch {
+    const match = String(hostPort).match(/^(.+):(\d+)$/);
+    return match
+      ? { host: stripIpv6Brackets(match[1]), port: Number.parseInt(match[2], 10) }
+      : { host: String(hostPort), port: 443 };
+  }
+}
+
+function isFunnelAllowed(sourceConfig, hostPort) {
+  const allowFunnel = sourceConfig?.AllowFunnel || {};
+  if (allowFunnel[hostPort] === true) return true;
+  if (allowFunnel[hostPort] === false) return false;
+  return Object.keys(allowFunnel).length === 0;
+}
+
+function targetMatches(target) {
+  const normalized = String(target || "").trim();
+  if (!normalized) return false;
+  if (normalized === String(targetPort)) return true;
+  try {
+    const url = new URL(normalized.includes("://") ? normalized : `http://${normalized}`);
+    return Number.parseInt(url.port || (url.protocol === "https:" ? "443" : "80"), 10) === targetPort;
+  } catch {
+    return normalized.endsWith(`:${targetPort}`);
+  }
+}
+
+function buildUrl(host, port) {
+  if (!host || !host.endsWith(".ts.net")) return "";
+  return `https://${host}${port && port !== 443 ? `:${port}` : ""}`;
+}
+
+const entries = [];
+function addEntry(sourceConfig, hostPort, mount = "/", target = "") {
+  const parsed = parseHostPort(hostPort);
+  entries.push({
+    hostPort,
+    host: parsed.host,
+    port: parsed.port,
+    mount,
+    target: String(target || ""),
+    public: isFunnelAllowed(sourceConfig, hostPort)
+  });
+}
+
+function collect(sourceConfig) {
+  if (!sourceConfig || typeof sourceConfig !== "object") return;
+  for (const [hostPort, webConfig] of Object.entries(sourceConfig.Web || {})) {
+    const handlers = webConfig?.Handlers || {};
+    const mounts = Object.keys(handlers);
+    if (!mounts.length) addEntry(sourceConfig, hostPort);
+    for (const [mount, handler] of Object.entries(handlers)) {
+      addEntry(sourceConfig, hostPort, mount, handler?.Proxy || handler?.TCPForward || handler?.Path || "");
+    }
+  }
+  for (const foreground of Object.values(sourceConfig.Foreground || {})) collect(foreground);
+  for (const service of Object.values(sourceConfig.Services || {})) collect(service);
+}
+
+collect(config);
+const relevant = entries.filter((entry) => entry.port === publicPort);
+if (!relevant.length) {
+  console.log("empty");
+  process.exit(0);
+}
+
+const conflicts = relevant.filter((entry) => !targetMatches(entry.target));
+if (conflicts.length) {
+  const details = conflicts
+    .map((entry) => `${entry.hostPort}${entry.mount || "/"} -> ${entry.target || "(unknown target)"}`)
+    .join("; ");
+  console.log(`conflict\t${details}`);
+  process.exit(0);
+}
+
+const publicMatch = relevant.find((entry) => entry.public);
+const first = publicMatch || relevant[0];
+console.log(`${publicMatch ? "match-public" : "match-private"}\t${buildUrl(first.host, first.port)}`);
+NODE
+}
+
+tailscale_status_file() {
+  local cli="$1" command="$2" file="$3"
+  "$cli" "$command" status --json >"$file" 2>/dev/null && [[ -s "$file" ]]
+}
+
+write_windows_funnel_env() {
+  local target_port="$1" public_url="$2"
+  set_local_env PORT "$target_port"
+  set_local_env UTH_TRUST_WINDOWS_FUNNEL 1
+  if [[ -n "$public_url" ]]; then
+    set_local_env UTH_PUBLIC_URL "$public_url"
+  fi
+}
+
+configure_windows_funnel() {
+  [[ "$WITH_WINDOWS_FUNNEL" == "1" ]] || return 0
+
+  if ! running_in_wsl; then
+    fail_setup "--with-windows-funnel only runs inside WSL, where the Windows Tailscale daemon is reachable through interop."
+    return 1
+  fi
+
+  local cli
+  if ! cli="$(resolve_windows_tailscale)"; then
+    fail_setup "Windows Tailscale CLI was not found under /mnt/c. Install Windows Tailscale first, then rerun setup."
+    return 1
+  fi
+
+  if ! valid_port "$WINDOWS_FUNNEL_TARGET_PORT"; then
+    fail_setup "Invalid --funnel-target-port: ${WINDOWS_FUNNEL_TARGET_PORT}"
+    return 1
+  fi
+  case "$WINDOWS_FUNNEL_HTTPS_PORT" in
+    443|8443|10000) ;;
+    *)
+      fail_setup "Invalid --funnel-https-port: ${WINDOWS_FUNNEL_HTTPS_PORT}. Tailscale Funnel allows 443, 8443, or 10000."
+      return 1
+      ;;
+  esac
+
+  log "Checking Windows localhost:${WINDOWS_FUNNEL_TARGET_PORT} before configuring Funnel"
+  ensure_windows_target_port_available "$WINDOWS_FUNNEL_TARGET_PORT" || return 1
+
+  local funnel_status serve_status funnel_state serve_state public_url args
+  funnel_status="$(mktemp)"
+  serve_status="$(mktemp)"
+
+  if tailscale_status_file "$cli" funnel "$funnel_status"; then
+    funnel_state="$(inspect_tailscale_status_file "$funnel_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  else
+    funnel_state="empty"
+  fi
+
+  case "$funnel_state" in
+    match-public*)
+      public_url="${funnel_state#*$'\t'}"
+      ok " Windows Funnel already points HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT} at localhost:${WINDOWS_FUNNEL_TARGET_PORT}"
+      write_windows_funnel_env "$WINDOWS_FUNNEL_TARGET_PORT" "$public_url"
+      rm -f "$funnel_status" "$serve_status"
+      return 0
+      ;;
+    conflict*)
+      rm -f "$funnel_status" "$serve_status"
+      fail_setup "Windows Funnel HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT} is already configured for another target: ${funnel_state#*$'\t'}"
+      return 1
+      ;;
+  esac
+
+  if tailscale_status_file "$cli" serve "$serve_status"; then
+    serve_state="$(inspect_tailscale_status_file "$serve_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  else
+    serve_state="empty"
+  fi
+  case "$serve_state" in
+    match-*|conflict*)
+      rm -f "$funnel_status" "$serve_status"
+      fail_setup "Windows Tailscale Serve already owns HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT}: ${serve_state#*$'\t'}. Refusing to make it public with Funnel."
+      return 1
+      ;;
+  esac
+
+  log "Configuring Windows Tailscale Funnel HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT} -> http://127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}"
+  args=(funnel --bg "--https=${WINDOWS_FUNNEL_HTTPS_PORT}")
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    args+=(--yes)
+  fi
+  args+=("http://127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}")
+  if ! run_cmd "$cli" "${args[@]}"; then
+    rm -f "$funnel_status" "$serve_status"
+    fail_setup "Windows Tailscale Funnel command failed. The tailnet may need Funnel policy/HTTPS enabled."
+    return 1
+  fi
+
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    rm -f "$funnel_status" "$serve_status"
+    return 0
+  fi
+
+  if tailscale_status_file "$cli" funnel "$funnel_status"; then
+    funnel_state="$(inspect_tailscale_status_file "$funnel_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  else
+    funnel_state="empty"
+  fi
+  if [[ "$funnel_state" != match-public* ]]; then
+    rm -f "$funnel_status" "$serve_status"
+    fail_setup "Windows Funnel command finished, but status did not show a public mapping for localhost:${WINDOWS_FUNNEL_TARGET_PORT}."
+    return 1
+  fi
+
+  public_url="${funnel_state#*$'\t'}"
+  write_windows_funnel_env "$WINDOWS_FUNNEL_TARGET_PORT" "$public_url"
+  ok " Windows Funnel configured${public_url:+ at $public_url}"
+  rm -f "$funnel_status" "$serve_status"
+}
+
 check_optional_tools() {
   if have objdump || have otool; then
     ok " Object disassembler available"
@@ -422,7 +809,7 @@ check_optional_tools() {
   if tailscale_cli="$(resolve_tailscale)"; then
     ok " Tailscale CLI $tailscale_cli"
     if [[ "$tailscale_cli" == /mnt/* ]]; then
-      warn "That is the Windows Tailscale CLI seen through WSL interop; its Funnel target is the Windows host, not this WSL listener."
+      warn "That is the Windows Tailscale CLI seen through WSL interop; use --with-windows-funnel to configure it safely for this viewer."
     fi
   else
     warn "Tailscale CLI unavailable; Tailnet discovery/Funnel detection will be limited."
@@ -448,6 +835,25 @@ main() {
       --yes|-y) ASSUME_YES=1 ;;
       --with-tailscale) WITH_TAILSCALE=1 ;;
       --with-uv) WITH_UV=1 ;;
+      --with-windows-funnel) WITH_WINDOWS_FUNNEL=1 ;;
+      --funnel-target-port)
+        shift
+        if [[ $# -eq 0 ]]; then
+          printf 'Missing value for --funnel-target-port\n\n'
+          usage
+          exit 2
+        fi
+        WINDOWS_FUNNEL_TARGET_PORT="$1"
+        ;;
+      --funnel-https-port)
+        shift
+        if [[ $# -eq 0 ]]; then
+          printf 'Missing value for --funnel-https-port\n\n'
+          usage
+          exit 2
+        fi
+        WINDOWS_FUNNEL_HTTPS_PORT="$1"
+        ;;
       --help|-h) usage; exit 0 ;;
       *) printf 'Unknown option: %s\n\n' "$1"; usage; exit 2 ;;
     esac
@@ -455,6 +861,14 @@ main() {
   done
 
   cd "$PROJECT_DIR"
+  if [[ -z "$WINDOWS_FUNNEL_TARGET_PORT" ]]; then
+    WINDOWS_FUNNEL_TARGET_PORT="${PORT:-}"
+  fi
+  if [[ -z "$WINDOWS_FUNNEL_TARGET_PORT" ]]; then
+    WINDOWS_FUNNEL_TARGET_PORT="$(env_file_value PORT || true)"
+  fi
+  WINDOWS_FUNNEL_TARGET_PORT="${WINDOWS_FUNNEL_TARGET_PORT:-5173}"
+
   log "Setting up Under the Hood dependencies"
 
   case "$(uname -s)" in
@@ -475,6 +889,7 @@ main() {
       ;;
   esac
 
+  configure_windows_funnel
   check_optional_tools
   print_versions
 

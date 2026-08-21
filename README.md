@@ -35,6 +35,17 @@ npm run start-server
 
 Open the URL printed in the terminal.
 
+## Optional browser login
+
+Create a `.env` file in the project root and set either or both login values:
+
+```sh
+USERNAME=viewer
+PASSWORD=change-me
+```
+
+If only `USERNAME` is populated, the browser asks for the username. If only `PASSWORD` is populated, it asks for the password. If both are populated, both must match. If neither is populated, the viewer opens directly as before.
+
 ## Setup
 
 Install or check the non-Python dependencies:
@@ -44,6 +55,14 @@ Install or check the non-Python dependencies:
 ```
 
 Use `./setup.sh --check-only` for a dry check, or `./setup.sh --with-tailscale` on machines where you also want the script to install the Tailscale CLI/daemon. The required tools are Node.js/npm 18+, `clang`, `nm`, `ps`, and `lsof`. Optional tools include Tailscale, `uv`, `objdump`/`otool`, `strace` (Linux/WSL syscall tracing), and `vmmap`/`dtruss` (macOS).
+
+In WSL with Tailscale running on Windows, configure the Windows-level public Funnel explicitly:
+
+```sh
+./setup.sh --with-windows-funnel --yes
+```
+
+This checks Windows `localhost:<port>` first. If that port is already serving something other than this viewer, setup fails rather than exposing it. It also refuses to overwrite an existing Windows Tailscale Serve/Funnel mapping on the selected public HTTPS port. Use `--funnel-target-port 5174` if the viewer should run on a different local port, and `--funnel-https-port 8443` or `10000` if public `443` is already intentionally used.
 
 ## CLI
 
@@ -86,7 +105,7 @@ When running inside WSL, the folder browser and compiler see the WSL filesystem.
 Which side runs Tailscale changes what the viewer can do:
 
 - **Tailscale inside WSL** is the configuration this project is built for. WSL gets its own `100.x.y.z` address, `UTH_BIND=tailnet` binds to it, and Serve/Funnel targets reach the WSL listener directly.
-- **Tailscale on Windows only** means WSL has no `100.x.y.z` interface, so `UTH_BIND=tailnet` falls back to localhost and prints a warning. The viewer can still find the Windows CLI at `/mnt/c/Program Files/Tailscale/tailscale.exe` for status and Funnel detection, but that CLI describes the *Windows* node. Its Funnel target is Windows loopback, not the WSL listener, so the viewer does not automatically advertise that public URL from WSL. It only works after Windows can reach the WSL listener, for example through a deliberate Windows port forward to the viewer. After verifying `https://your-node.ts.net/api/health` returns this viewer's health payload, set `UTH_PUBLIC_URL=https://your-node.ts.net` or `UTH_TRUST_WINDOWS_FUNNEL=1`.
+- **Tailscale on Windows only** means WSL has no `100.x.y.z` interface, so `UTH_BIND=tailnet` falls back to localhost and prints a warning. The viewer can still find the Windows CLI at `/mnt/c/Program Files/Tailscale/tailscale.exe` for status and Funnel detection, but that CLI describes the *Windows* node. Its Funnel target is Windows loopback, not the WSL listener. Run `./setup.sh --with-windows-funnel --yes` from WSL to configure the Windows daemon safely. Setup writes the verified port/public URL to `.env`, which the launcher and server load on startup.
 
 ## View the browser over Tailscale
 
