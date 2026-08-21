@@ -27,6 +27,7 @@ const bindHost = resolvedBind.host;
 const bindMode = resolvedBind.mode;
 const explicitPublicUrl = process.env.UTH_PUBLIC_URL || process.env.UTH_FUNNEL_URL || "";
 const tailscaleCertDomain = process.env.TS_CERT_DOMAIN || "";
+const trustWindowsInteropFunnel = /^(1|true|yes)$/i.test(process.env.UTH_TRUST_WINDOWS_FUNNEL || "");
 const maxBodyBytes = 3 * 1024 * 1024;
 const maxOutputBytes = 2 * 1024 * 1024;
 const textLimit = 220_000;
@@ -509,8 +510,9 @@ async function detectFunnel(port) {
     };
   }
 
-  const interopNote = isWindowsInteropCli(tailscalePath)
-    ? " This is the Windows Tailscale CLI reached over WSL interop, so its Funnel target is the Windows host, not this WSL listener."
+  const usesWindowsInterop = isWindowsInteropCli(tailscalePath);
+  const interopNote = usesWindowsInterop
+    ? " This is the Windows Tailscale CLI reached over WSL interop, so its Funnel target is Windows loopback, not this WSL listener."
     : "";
 
   for (const command of ["funnel", "serve"]) {
@@ -523,6 +525,17 @@ async function detectFunnel(port) {
       const status = JSON.parse(result.stdout);
       const urls = extractFunnelUrls(status, port);
       if (urls.length) {
+        if (usesWindowsInterop && isWslRuntime() && !trustWindowsInteropFunnel) {
+          return {
+            primaryUrl: "",
+            urls,
+            source: `tailscale ${command} status --json`,
+            message:
+              `Detected ${urls.length} Windows-hosted Funnel URL${urls.length === 1 ? "" : "s"}, but not advertising ` +
+              "it automatically from WSL. Verify the Windows Funnel target reaches this viewer's /api/health, then " +
+              "set UTH_PUBLIC_URL to that URL or set UTH_TRUST_WINDOWS_FUNNEL=1."
+          };
+        }
         return {
           primaryUrl: urls[0],
           urls,

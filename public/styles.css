@@ -24,9 +24,15 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
   background:
     linear-gradient(180deg, rgba(20, 116, 111, 0.08), transparent 34rem),
     var(--paper);
@@ -38,10 +44,12 @@ input,
 select,
 textarea {
   font: inherit;
+  max-width: 100%;
 }
 
 button {
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .topbar {
@@ -144,7 +152,7 @@ button {
   display: grid;
   grid-template-columns: 12rem minmax(0, 1fr);
   gap: 1rem;
-  padding: 1rem;
+  padding: 1rem max(1rem, env(safe-area-inset-right)) 1rem max(1rem, env(safe-area-inset-left));
   max-width: 1720px;
   margin: 0 auto;
 }
@@ -160,6 +168,18 @@ button {
   background: var(--panel);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+
+.mode-rail,
+.tab-list,
+.folder-places,
+.file-list,
+.stage-list,
+.layer-list,
+.histogram,
+.artifact-output,
+textarea {
+  -webkit-overflow-scrolling: touch;
 }
 
 .mode-button {
@@ -388,8 +408,10 @@ input[type="number"] {
 textarea {
   display: block;
   width: 100%;
-  min-height: 560px;
+  height: 560px;
+  min-height: 360px;
   resize: vertical;
+  overflow: auto;
   border: 0;
   outline: 0;
   padding: 1rem;
@@ -663,23 +685,68 @@ textarea {
 }
 
 @media (max-width: 720px) {
+  body {
+    background:
+      linear-gradient(180deg, rgba(20, 116, 111, 0.07), transparent 18rem),
+      var(--paper);
+  }
+
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    position: static;
+    min-height: 0;
+    gap: 0.75rem;
+    padding: 0.75rem max(0.75rem, env(safe-area-inset-right)) 0.85rem max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .brand {
+    gap: 0.65rem;
+    width: 100%;
+  }
+
+  .brand-mark {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 auto;
+  }
+
+  .brand h1 {
+    font-size: 1.15rem;
+  }
+
+  .brand p {
+    font-size: 0.82rem;
+    line-height: 1.3;
+    max-width: 22rem;
   }
 
   .runtime {
     justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
+    font-size: 0.82rem;
   }
 
   .target-switcher {
-    justify-content: stretch;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    align-items: end;
+  }
+
+  .target-switcher label {
+    min-width: 0;
+  }
+
+  .target-switcher label:first-child,
+  .target-switcher label:nth-child(2),
+  .target-switcher input[type="text"] {
     width: 100%;
   }
 
-  .target-switcher label,
-  .target-switcher input[type="text"] {
-    width: 100%;
+  .target-switcher label:nth-child(2) {
+    grid-column: 1 / -1;
   }
 
   .access-links {
@@ -688,9 +755,50 @@ textarea {
     flex-direction: column;
   }
 
+  .app-shell {
+    gap: 0.75rem;
+    padding: 0 0.65rem max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .mode-rail {
+    display: flex;
+    gap: 0.45rem;
+    overflow-x: auto;
+    position: sticky;
+    top: 0;
+    z-index: 9;
+    margin: 0 -0.65rem;
+    padding: 0.5rem max(0.65rem, env(safe-area-inset-right)) 0.5rem max(0.65rem, env(safe-area-inset-left));
+    border-inline: 0;
+    border-radius: 0;
+    box-shadow: 0 10px 22px rgba(23, 33, 31, 0.08);
+  }
+
+  .mode-button {
+    flex: 0 0 auto;
+    grid-template-columns: 1.8rem max-content;
+    width: auto;
+    min-width: 8.1rem;
+    min-height: 42px;
+    padding: 0 0.65rem;
+  }
+
+  .mode-icon {
+    width: 1.8rem;
+    height: 1.8rem;
+    font-size: 0.72rem;
+  }
+
+  .workspace {
+    gap: 0.75rem;
+  }
+
   .controls-strip {
     display: grid;
     grid-template-columns: 1fr;
+    gap: 0.6rem;
+    padding: 0.7rem;
+    box-shadow: 0 10px 24px rgba(23, 33, 31, 0.08);
   }
 
   .path-picker-field {
@@ -710,7 +818,108 @@ textarea {
     width: 100%;
   }
 
-  .mode-rail {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  input,
+  select,
+  .primary-button,
+  .secondary-button,
+  .text-button {
+    min-height: 44px;
+  }
+
+  .main-grid,
+  .save-grid,
+  .process-layout {
+    gap: 0.75rem;
+  }
+
+  .panel-heading {
+    min-height: 46px;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .file-list,
+  .stage-list,
+  .layer-list,
+  .histogram,
+  .artifact-output {
+    max-height: none;
+  }
+
+  .file-list,
+  .stage-list,
+  .layer-list {
+    overflow: visible;
+    padding: 0.55rem;
+  }
+
+  .histogram {
+    overflow: visible;
+    padding: 0 0.55rem 0.55rem;
+  }
+
+  textarea {
+    height: clamp(18rem, 52dvh, 32rem);
+    min-height: 18rem;
+    padding: 0.8rem;
+    line-height: 1.45;
+  }
+
+  #pipelineCanvas {
+    height: 170px;
+  }
+
+  .artifact-output {
+    min-height: 16rem;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: 0.8rem;
+    font-size: 0.82rem;
+  }
+
+  .tab-list {
+    padding: 0.45rem;
+  }
+
+  .artifact-tab,
+  .save-tab,
+  .process-tab {
+    min-height: 40px;
+    padding: 0 0.65rem;
+  }
+
+  .histogram-row {
+    grid-template-columns: minmax(0, 1fr) 5.5rem;
+  }
+
+  .folder-dialog {
+    width: calc(100vw - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+  }
+
+  .folder-dialog-inner {
+    max-height: calc(100dvh - 0.75rem);
+    overflow: auto;
+    padding: 0.75rem;
+  }
+
+  .folder-dialog-heading,
+  .folder-path-row {
+    display: grid;
     grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .folder-dialog-actions {
+    justify-content: stretch;
+  }
+
+  .folder-dialog-actions .primary-button {
+    width: 100%;
   }
 }

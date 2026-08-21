@@ -37,7 +37,8 @@ fi
 case "$CLI" in
   /mnt/*)
     echo "Using the Windows Tailscale CLI through WSL interop ($CLI)." >&2
-    echo "Its Serve/Funnel target is the Windows host, not this WSL listener." >&2
+    echo "Its Serve/Funnel target is Windows loopback, not this WSL listener." >&2
+    echo "Verify the Windows target reaches this viewer before trusting the public Funnel URL." >&2
     ;;
 esac
 

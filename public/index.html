@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Under the Hood Viewer</title>
     <meta
       name="description"
@@ -123,7 +123,13 @@
         <section class="controls-strip" aria-label="Save controls">
           <label>
             Save path
-            <input id="savePath" type="text" autocomplete="off">
+            <input
+              id="savePath"
+              type="text"
+              autocomplete="off"
+              placeholder="blank = temporary output"
+              title="The save probe writes a real file here. Leave blank to use a temporary output file."
+            >
           </label>
           <label>
             Optimization

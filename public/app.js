@@ -88,6 +88,10 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const savedTargetsKey = "under-the-hood.targets";
 
+function resetSavePath() {
+  $("#savePath").value = "";
+}
+
 function setStatus(message) {
   $("#runtimeStatus").textContent = message;
 }
@@ -138,6 +142,11 @@ function renderAccessLinks(health = {}) {
 
   if (tailnetUrl) {
     container.innerHTML = `Tailnet detected: restart with <code>npm run tailnet</code> for <a href="${escapeHtml(tailnetUrl)}">${escapeHtml(tailnetUrl)}</a>`;
+    return;
+  }
+
+  if (health.browserUrls?.funnelMessage) {
+    container.textContent = health.browserUrls.funnelMessage;
     return;
   }
 
@@ -313,7 +322,7 @@ async function connectTarget() {
   state.root = health.root;
   $("#folderPath").value = health.root;
   $("#pidInput").value = health.pid;
-  $("#savePath").value = `${health.root}/tmp/save-output.bin`;
+  resetSavePath();
   state.currentFileName = "snippet.c";
   state.currentFilePath = "";
   state.currentLanguage = "c";
@@ -935,7 +944,7 @@ async function boot() {
     state.root = health.root;
     $("#folderPath").value = health.root;
     $("#pidInput").value = health.pid;
-    $("#savePath").value = `${health.root}/tmp/save-output.bin`;
+    resetSavePath();
     renderAccessLinks(health);
     setStatus(`Local · ${health.platform}/${health.arch} · PID ${health.pid}`);
     await scanFiles();

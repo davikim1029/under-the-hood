@@ -86,7 +86,7 @@ When running inside WSL, the folder browser and compiler see the WSL filesystem.
 Which side runs Tailscale changes what the viewer can do:
 
 - **Tailscale inside WSL** is the configuration this project is built for. WSL gets its own `100.x.y.z` address, `UTH_BIND=tailnet` binds to it, and Serve/Funnel targets reach the WSL listener directly.
-- **Tailscale on Windows only** means WSL has no `100.x.y.z` interface, so `UTH_BIND=tailnet` falls back to localhost and prints a warning. The viewer can still find the Windows CLI at `/mnt/c/Program Files/Tailscale/tailscale.exe` for status and Funnel detection, but that CLI describes the *Windows* node. Its Funnel target is the Windows host, not the WSL listener, so the detected URL is reported with a warning and only works if Windows forwards the port into WSL. Bind with `npm run agent` (`0.0.0.0`) in that setup.
+- **Tailscale on Windows only** means WSL has no `100.x.y.z` interface, so `UTH_BIND=tailnet` falls back to localhost and prints a warning. The viewer can still find the Windows CLI at `/mnt/c/Program Files/Tailscale/tailscale.exe` for status and Funnel detection, but that CLI describes the *Windows* node. Its Funnel target is Windows loopback, not the WSL listener, so the viewer does not automatically advertise that public URL from WSL. It only works after Windows can reach the WSL listener, for example through a deliberate Windows port forward to the viewer. After verifying `https://your-node.ts.net/api/health` returns this viewer's health payload, set `UTH_PUBLIC_URL=https://your-node.ts.net` or `UTH_TRUST_WINDOWS_FUNNEL=1`.
 
 ## View the browser over Tailscale
 
@@ -105,6 +105,10 @@ UTH_BIND=100.x.y.z npm start
 ```
 
 This viewer can compile and run local code, read selected source files, create save-test files, and inspect process metadata. Keep it limited to trusted Tailnet devices and Tailscale ACLs.
+
+### Save probe behavior
+
+The Save Trace view compiles and runs the C source shown in its editor. It writes a real file, then reads that file back for metadata and a hex dump. If the Save path field is blank, the file is written under a temporary `uth-save-*` directory and the exact path is shown in the output. If you enter a path, the probe passes that path to the program and the program may create or overwrite that file depending on its own save code.
 
 ## Detect the Funnel URL
 
@@ -129,7 +133,7 @@ The viewer detects Funnel in this order:
 - `tailscale funnel status --json`.
 - `tailscale serve status --json`, for configurations where Funnel state is visible through Serve status.
 
-When a matching Funnel entry proxies to the viewer's local port, `/api/health` returns it in `browserUrls.funnel`, and the app header shows it as the public access URL.
+When a matching Funnel entry proxies to the viewer's local port, `/api/health` returns it in `browserUrls.funnel`, and the app header shows it as the public access URL. In WSL with the Windows Tailscale CLI, the URL is shown as a candidate until you explicitly trust it, because the public endpoint terminates on Windows and may be pointing at a different process.
 
 Funnel is public internet exposure. Use it only when you are comfortable exposing this local inspection tool beyond the Tailnet.
 

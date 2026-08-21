@@ -273,6 +273,12 @@ def print_health(result: HealthResult) -> None:
         print(f"tailnet: {urls['tailnet']}")
     if urls.get("funnel"):
         print(f"funnel: {urls['funnel']}")
+    elif urls.get("funnelUrls"):
+        print(f"funnel candidates: {', '.join(urls['funnelUrls'])}")
+    if urls.get("funnelSource"):
+        print(f"funnel source: {urls['funnelSource']}")
+    if urls.get("funnelMessage"):
+        print(f"funnel message: {urls['funnelMessage']}")
     print(f"advertised: {best_url(result)}")
     print_access_notes(result)
 
@@ -555,12 +561,12 @@ def print_url(port: int) -> None:
     try:
         print(best_url(read_health(port, timeout=2.0, include_tailnet=False)))
         return
-    except RuntimeError:
-        url = tailnet_url(port)
-        if url:
-            print(url)
-            return
-    raise SystemExit("No running viewer or Tailscale interface was detected on this machine.")
+    except RuntimeError as error:
+        raise SystemExit(
+            "No running viewer answered /api/health, so no URL was printed.\n"
+            "Start or restart the viewer first; a raw Tailscale interface URL is not enough to prove the public API is reachable.\n"
+            f"{error}"
+        ) from error
 
 
 def tail_log(path: Path = LOG_FILE, lines: int = 40) -> None:
