@@ -64,6 +64,8 @@ In WSL with Tailscale running on Windows, configure the Windows-level public Fun
 
 This checks Windows `localhost:<port>` first. If that port is already serving something other than this viewer, setup fails rather than exposing it. It also refuses to overwrite an existing Windows Tailscale Serve/Funnel mapping on the selected public HTTPS port. Use `--funnel-target-port 5174` if the viewer should run on a different local port, and `--funnel-https-port 8443` or `10000` if public `443` is already intentionally used.
 
+If running a Windows executable from WSL prints `UtilAcceptVsock` or `accept4 failed 110`, WSL's Windows-executable interop channel is wedged. That is not a Tailscale version problem. From Windows PowerShell, run `wsl --shutdown`, restart Docker Desktop if it owns WSL integration, then reopen WSL and rerun setup. As a manual fallback, validate `curl.exe http://127.0.0.1:5173/api/health` from Windows PowerShell, then run `tailscale funnel --bg --https=443 5173` there.
+
 ## CLI
 
 Interactive menu:

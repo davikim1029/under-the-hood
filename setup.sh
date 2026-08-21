@@ -159,6 +159,25 @@ fail_setup() {
   return 1
 }
 
+looks_like_wsl_interop_error() {
+  grep -qiE 'UtilAcceptVsock|Wsl/Service|Catastrophic failure' <<<"${1:-}"
+}
+
+windows_funnel_manual_hint() {
+  cat <<EOF
+Manual Windows PowerShell fallback:
+  curl.exe http://127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}/api/health
+  tailscale funnel --bg --https=${WINDOWS_FUNNEL_HTTPS_PORT} ${WINDOWS_FUNNEL_TARGET_PORT}
+EOF
+}
+
+fail_windows_interop() {
+  local cli="$1" detail="$2"
+  fail_setup "WSL could not run Windows executables through interop while calling ${cli}. This is not a Tailscale version problem. From Windows PowerShell, run 'wsl --shutdown', then reopen WSL and rerun setup. If Docker Desktop owns WSL integration, quit and restart Docker Desktop after shutdown. ${detail}"
+  windows_funnel_manual_hint
+  return 1
+}
+
 set_local_env() {
   local key="$1" value="$2" env_file="$PROJECT_DIR/.env" tmp_file
   if [[ "$CHECK_ONLY" == "1" ]]; then
@@ -671,8 +690,19 @@ NODE
 }
 
 tailscale_status_file() {
-  local cli="$1" command="$2" file="$3"
-  "$cli" "$command" status --json >"$file" 2>/dev/null && [[ -s "$file" ]]
+  local cli="$1" command="$2" file="$3" output status
+  set +e
+  output="$("$cli" "$command" status --json 2>&1 >"$file")"
+  status=$?
+  set -e
+  if [[ "$status" == "0" && -s "$file" ]]; then
+    return 0
+  fi
+  if looks_like_wsl_interop_error "$output"; then
+    fail_windows_interop "$cli" "$output"
+    return 1
+  fi
+  return 1
 }
 
 tailscale_funnel_help() {
@@ -681,8 +711,19 @@ tailscale_funnel_help() {
 }
 
 tailscale_cli_version() {
-  local cli="$1"
-  "$cli" version 2>/dev/null | tr -d '\r' | sed -n -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/p' | head -n 1
+  local cli="$1" output status
+  set +e
+  output="$("$cli" version 2>&1)"
+  status=$?
+  set -e
+  if looks_like_wsl_interop_error "$output"; then
+    printf 'WSL_INTEROP_ERROR\t%s\n' "$output"
+    return 1
+  fi
+  if [[ "$status" != "0" ]]; then
+    return "$status"
+  fi
+  printf '%s\n' "$output" | tr -d '\r' | sed -n -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/p' | head -n 1
 }
 
 version_at_least() {
@@ -706,7 +747,11 @@ NODE
 
 require_supported_funnel_cli() {
   local cli="$1" version help_text
-  version="$(tailscale_cli_version "$cli")"
+  version="$(tailscale_cli_version "$cli" || true)"
+  if [[ "$version" == WSL_INTEROP_ERROR* ]]; then
+    fail_windows_interop "$cli" "${version#*$'\t'}"
+    return 1
+  fi
   if [[ -n "$version" ]]; then
     if version_at_least "$version" "1.52.0"; then
       ok " Windows Tailscale CLI $cli ($version)"
@@ -717,6 +762,10 @@ require_supported_funnel_cli() {
   fi
 
   help_text="$(tailscale_funnel_help "$cli")"
+  if looks_like_wsl_interop_error "$help_text"; then
+    fail_windows_interop "$cli" "$help_text"
+    return 1
+  fi
   if ! grep -q -- '--https' <<<"$help_text"; then
     fail_setup "Could not read the Windows Tailscale CLI version or current Funnel flags from $cli. Run '$cli version' from WSL to verify it."
     return 1
@@ -746,6 +795,11 @@ run_windows_funnel_command() {
     if [[ "$status" == "0" ]]; then
       [[ -n "$output" ]] && printf '%s\n' "$output"
       return 0
+    fi
+
+    if looks_like_wsl_interop_error "$output"; then
+      fail_windows_interop "$cli" "$output"
+      return 1
     fi
 
     warn "tailscale funnel failed with target '${target_arg}': ${output:-exit status $status}"
@@ -799,6 +853,9 @@ configure_windows_funnel() {
 
   if tailscale_status_file "$cli" funnel "$funnel_status"; then
     funnel_state="$(inspect_tailscale_status_file "$funnel_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  elif [[ "$REQUIRED_MISSING" == "1" ]]; then
+    rm -f "$funnel_status" "$serve_status"
+    return 1
   else
     funnel_state="empty"
   fi
@@ -820,6 +877,9 @@ configure_windows_funnel() {
 
   if tailscale_status_file "$cli" serve "$serve_status"; then
     serve_state="$(inspect_tailscale_status_file "$serve_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  elif [[ "$REQUIRED_MISSING" == "1" ]]; then
+    rm -f "$funnel_status" "$serve_status"
+    return 1
   else
     serve_state="empty"
   fi
@@ -845,6 +905,9 @@ configure_windows_funnel() {
 
   if tailscale_status_file "$cli" funnel "$funnel_status"; then
     funnel_state="$(inspect_tailscale_status_file "$funnel_status" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT")"
+  elif [[ "$REQUIRED_MISSING" == "1" ]]; then
+    rm -f "$funnel_status" "$serve_status"
+    return 1
   else
     funnel_state="empty"
   fi
