@@ -248,6 +248,8 @@ body.auth-required .login-gate {
   display: grid;
   gap: 1rem;
   width: min(100%, 24rem);
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -259,6 +261,12 @@ body.auth-required .login-gate {
   display: flex;
   align-items: center;
   gap: 0.85rem;
+  min-width: 0;
+}
+
+.login-brand > div,
+.login-card label {
+  min-width: 0;
 }
 
 .login-brand h2,
@@ -280,7 +288,11 @@ body.auth-required .login-gate {
 
 .login-card input,
 .login-card button {
+  display: block;
   width: 100%;
+  min-width: 0;
+  inline-size: 100%;
+  max-inline-size: 100%;
 }
 
 .login-message {
