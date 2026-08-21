@@ -18,6 +18,7 @@ find_cli() {
     /Applications/Tailscale.app/Contents/MacOS/Tailscale \
     "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale" \
     "/mnt/c/Program Files/Tailscale/tailscale.exe" \
+    "/mnt/c/Program Files/TailScale/tailscale.exe" \
     "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"
   do
     if [ -x "$candidate" ]; then

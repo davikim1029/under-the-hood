@@ -79,6 +79,7 @@ resolve_tailscale() {
     /Applications/Tailscale.app/Contents/MacOS/Tailscale \
     "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale" \
     "/mnt/c/Program Files/Tailscale/tailscale.exe" \
+    "/mnt/c/Program Files/TailScale/tailscale.exe" \
     "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
@@ -107,6 +108,7 @@ resolve_windows_tailscale() {
   local candidate
   for candidate in \
     "/mnt/c/Program Files/Tailscale/tailscale.exe" \
+    "/mnt/c/Program Files/TailScale/tailscale.exe" \
     "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
@@ -673,6 +675,50 @@ tailscale_status_file() {
   "$cli" "$command" status --json >"$file" 2>/dev/null && [[ -s "$file" ]]
 }
 
+tailscale_funnel_help() {
+  local cli="$1"
+  "$cli" funnel --help 2>&1 || true
+}
+
+require_supported_funnel_cli() {
+  local cli="$1" help_text
+  help_text="$(tailscale_funnel_help "$cli")"
+  if ! grep -q -- '--https' <<<"$help_text"; then
+    fail_setup "This Windows Tailscale CLI does not appear to support the current Funnel syntax. Upgrade Windows Tailscale to 1.52+."
+    return 1
+  fi
+}
+
+run_windows_funnel_command() {
+  local cli="$1" https_port="$2" target_port="$3" target_arg output status args
+
+  for target_arg in "$target_port" "localhost:${target_port}"; do
+    args=(funnel --bg "--https=${https_port}")
+    if [[ "$ASSUME_YES" == "1" ]] && tailscale_funnel_help "$cli" | grep -q -- '--yes'; then
+      args+=(--yes)
+    fi
+    args+=("$target_arg")
+
+    if [[ "$CHECK_ONLY" == "1" ]]; then
+      run_cmd "$cli" "${args[@]}"
+      return 0
+    fi
+
+    set +e
+    output="$("$cli" "${args[@]}" 2>&1)"
+    status=$?
+    set -e
+    if [[ "$status" == "0" ]]; then
+      [[ -n "$output" ]] && printf '%s\n' "$output"
+      return 0
+    fi
+
+    warn "tailscale funnel failed with target '${target_arg}': ${output:-exit status $status}"
+  done
+
+  return 1
+}
+
 write_windows_funnel_env() {
   local target_port="$1" public_url="$2"
   set_local_env PORT "$target_port"
@@ -695,6 +741,7 @@ configure_windows_funnel() {
     fail_setup "Windows Tailscale CLI was not found under /mnt/c. Install Windows Tailscale first, then rerun setup."
     return 1
   fi
+  require_supported_funnel_cli "$cli" || return 1
 
   if ! valid_port "$WINDOWS_FUNNEL_TARGET_PORT"; then
     fail_setup "Invalid --funnel-target-port: ${WINDOWS_FUNNEL_TARGET_PORT}"
@@ -711,7 +758,7 @@ configure_windows_funnel() {
   log "Checking Windows localhost:${WINDOWS_FUNNEL_TARGET_PORT} before configuring Funnel"
   ensure_windows_target_port_available "$WINDOWS_FUNNEL_TARGET_PORT" || return 1
 
-  local funnel_status serve_status funnel_state serve_state public_url args
+  local funnel_status serve_status funnel_state serve_state public_url
   funnel_status="$(mktemp)"
   serve_status="$(mktemp)"
 
@@ -749,15 +796,10 @@ configure_windows_funnel() {
       ;;
   esac
 
-  log "Configuring Windows Tailscale Funnel HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT} -> http://127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}"
-  args=(funnel --bg "--https=${WINDOWS_FUNNEL_HTTPS_PORT}")
-  if [[ "$ASSUME_YES" == "1" ]]; then
-    args+=(--yes)
-  fi
-  args+=("http://127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}")
-  if ! run_cmd "$cli" "${args[@]}"; then
+  log "Configuring Windows Tailscale Funnel HTTPS ${WINDOWS_FUNNEL_HTTPS_PORT} -> 127.0.0.1:${WINDOWS_FUNNEL_TARGET_PORT}"
+  if ! run_windows_funnel_command "$cli" "$WINDOWS_FUNNEL_HTTPS_PORT" "$WINDOWS_FUNNEL_TARGET_PORT"; then
     rm -f "$funnel_status" "$serve_status"
-    fail_setup "Windows Tailscale Funnel command failed. The tailnet may need Funnel policy/HTTPS enabled."
+    fail_setup "Windows Tailscale Funnel command failed after trying both '${WINDOWS_FUNNEL_TARGET_PORT}' and 'localhost:${WINDOWS_FUNNEL_TARGET_PORT}'. The tailnet may need Funnel policy/HTTPS enabled, or Windows Tailscale may need an update."
     return 1
   fi
 

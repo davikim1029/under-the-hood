@@ -491,6 +491,7 @@ async function findTailscaleCli() {
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     path.join(os.homedir(), "Applications/Tailscale.app/Contents/MacOS/Tailscale"),
     "/mnt/c/Program Files/Tailscale/tailscale.exe",
+    "/mnt/c/Program Files/TailScale/tailscale.exe",
     "/mnt/c/Program Files (x86)/Tailscale/tailscale.exe"
   ];
   for (const candidate of candidates) {
